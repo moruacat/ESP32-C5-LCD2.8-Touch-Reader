@@ -1,0 +1,44 @@
+# ===== 构建产物 =====
+build/
+sim/build/
+managed_components/
+.idf-cache/
+__pycache__/
+*.pyc
+*.o
+*.obj
+*.exe
+
+# ===== 大型原始数据（本地保留，不入库）=====
+# ECDICT 原始词库 66MB，用 tools/build_dict.py 从本地这份重新生成
+words/ecdict.csv
+
+# 模拟器/固件用的大型媒体与词库生成物（可由脚本重建）
+sim/sd/books/
+sim/sd/music/
+sim/sd/photos/
+sim/sd/DCIM/
+sim/sd/record/
+sim/sd/temp-rec/
+sim/sd/system_update/
+photos/
+dict/dict.dat
+dict/dict.idx
+dict/dict.csv.bak
+sim/sd/dict/dict.dat
+sim/sd/dict/dict.idx
+sim/sd/dict/dict.csv.bak
+
+# ===== 本地环境 =====
+tools/venv/
+.venv/
+*.log
+*.bak
+main/assets/fonts/*.bak
+sim/sd/*.dat
+sim/sd/**/*.dat
+sim/sd/System Volume Information/
+sim/err.txt
+sim/out.txt
+tools/netprobe.out.txt
+tools/t.txt

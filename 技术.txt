@@ -1,0 +1,2 @@
+开发环境：ESP-IDF_6.1
+开发板：https://docs.waveshare.net/ESP32-C5-Touch-LCD-2.8
