@@ -26,6 +26,7 @@ static char        s_root[64];
 static srv_photo_t *s_items = NULL;
 static int          s_count = 0;
 static bool         s_overflow = false;     /*!< 本轮扫描是否超限（只报一次日志） */
+static int          s_bad = 0;              /*!< 本轮扫描剔掉的大小异常文件数 */
 /*! 扫描标志：扫描期间条目表在被改写，查表/读图先让开 */
 static volatile bool s_busy = false;
 
@@ -124,6 +125,12 @@ static bool add_from_entry(const srv_fs_entry_t *e, void *arg)
     if (e->is_dir || !ends_with_ci(e->name, RAW_SUFFIX)) {
         return true;                    /* 只要 .raw 文件，其余一律跳过 */
     }
+    /* 尺寸不对的（没拷完、被截断、或不是 photo2raw 转的）直接在扫描阶段剔掉：
+     * 列表里不该出现一张点开就报"文件损坏"的条目。 */
+    if (e->size != SRV_PHOTO_BYTES) {
+        s_bad++;
+        return true;
+    }
     if (s_count >= PHOTO_HARD_MAX) {
         /* 到这里说明照片比 PHOTO_HARD_MAX 还多（>1024 张）：
          * 继续收也没意义，且收满的已经是字典序前一批，排完序照样断号。
@@ -166,6 +173,7 @@ static esp_err_t scan_impl(void)
 
     s_count = 0;
     s_overflow = false;
+    s_bad = 0;
     esp_err_t ret = srv_fs_list(srv_photo_root(), add_from_entry, NULL);
     if (ret != ESP_OK && ret != ESP_ERR_NOT_FOUND) {
         ESP_LOGW(TAG, "扫描失败: %s", esp_err_to_name(ret));
@@ -184,7 +192,12 @@ static esp_err_t scan_impl(void)
         s_count = SRV_PHOTO_MAX;
     }
 
-    ESP_LOGI(TAG, "照片扫描完成：%s 下 %d 张", srv_photo_root(), s_count);
+    ESP_LOGI(TAG, "照片扫描完成：%s 下 %d 张%s", srv_photo_root(), s_count,
+             s_bad > 0 ? "（另有尺寸异常的 .raw 已跳过）" : "");
+    if (s_bad > 0) {
+        ESP_LOGW(TAG, "%d 个 .raw 大小不是 %d 字节（没拷完或不是 photo2raw 转的）",
+                 s_bad, (int)SRV_PHOTO_BYTES);
+    }
     return ESP_OK;
 }
 

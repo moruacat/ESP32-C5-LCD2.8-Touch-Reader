@@ -7,6 +7,7 @@ photo2raw —— 把图片批量转成固件能直接显示的 320x240 RGB565 �
     python photo2raw.py 图片目录 -o E:\\photos          # 目录批量（递归子目录）
     python photo2raw.py a.png b.webp -o E:\\photos      # 指定若干文件
     python photo2raw.py 图片目录 --overwrite           # 覆盖已存在的同名输出
+    python photo2raw.py 图片目录 --auto-rotate         # 竖图自动逆时针转 90°
 
 输出:
     <源文件名>.raw      纯像素数据，没有文件头
@@ -16,6 +17,8 @@ photo2raw —— 把图片批量转成固件能直接显示的 320x240 RGB565 �
 转换规则:
     - 等比缩放到不超过 320x240（只缩小，绝不放大），再居中贴到 320x240 黑底画布
     - 不裁剪，尺寸不足的方向留黑边
+    - 加 --auto-rotate 时，若把图片逆时针旋转 90° 能显示更多像素，就自动旋转；
+      横图、方图和旋转后不会更大的图保持原样
     - 支持的输入：PNG / JPG / JPEG / WEBP（后缀大小写不敏感）
 
 重名:
@@ -60,6 +63,34 @@ STATUS_FAIL = "fail"
 
 class ConvertError(Exception):
     """转换失败，消息直接给用户看"""
+
+
+# ===================== 自动旋转 =====================
+
+def _fit_size(w: int, h: int) -> tuple[float, float]:
+    """等比缩放到 320x240 画布后的实际尺寸（只缩小，不放大）。"""
+    scale = min(TARGET_W / w, TARGET_H / h, 1.0)
+    return w * scale, h * scale
+
+
+def should_rotate_ccw(width: int, height: int) -> bool:
+    """逆时针旋转 90° 后能显示的像素是否更多。
+
+    比较的是「等比缩放 + 居中」后的实际面积；横图、方图以及旋转后
+    反而更小的图都返回 False。加 0.5 是为了吃掉浮点误差。
+    """
+    if width <= 0 or height <= 0:
+        return False
+    w0, h0 = _fit_size(width, height)
+    w1, h1 = _fit_size(height, width)
+    return w1 * h1 > w0 * h0 + 0.5
+
+
+def orient_for_display(im, auto_rotate: bool):
+    """按需逆时针旋转 90°，返回 (图像, 是否旋转过)。"""
+    if not auto_rotate or not should_rotate_ccw(*im.size):
+        return im, False
+    return im.transpose(Image.Transpose.ROTATE_90), True
 
 
 # ===================== RGB565 打包 =====================
@@ -118,6 +149,7 @@ class Options:
     """一次转换的全部参数，CLI 和 GUI 都构造它"""
     out_root: Path | None = None            # None = 与源文件同目录
     overwrite: bool = False                 # 同名输出已存在时直接覆盖
+    auto_rotate: bool = False               # 竖图自动逆时针旋转 90° 后显示面积更大
     quiet: bool = False
     log: Callable[[str], None] | None = None        # 正常信息
     warn: Callable[[str], None] | None = None       # 警告/错误
@@ -163,6 +195,7 @@ def convert_one(src: Path, opt: Options) -> str:
     try:
         im = load_image(src)
         w, h = im.size
+        im, rotated = orient_for_display(im, opt.auto_rotate)
         data = image_to_raw(im)
         if len(data) != RAW_BYTES:
             raise ConvertError(f"内部错误：生成 {len(data)} 字节，应为 {RAW_BYTES}")
@@ -172,7 +205,8 @@ def convert_one(src: Path, opt: Options) -> str:
         target = resolve_target(src, out_dir, opt.overwrite)
         target.write_bytes(data)
 
-        opt.info(f"  {w}x{h} → {TARGET_W}x{TARGET_H}  输出 {target.name}"
+        turned = "  逆时针旋转 90°" if rotated else ""
+        opt.info(f"  {w}x{h} → {TARGET_W}x{TARGET_H}{turned}  输出 {target.name}"
                  f"（{len(data)} 字节）")
         return STATUS_OK
     except ConvertError as e:
@@ -246,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("input", nargs="+", help="图片文件或包含图片的目录（可多个，目录递归）")
     ap.add_argument("-o", "--out", help="输出目录（默认与源文件同目录）")
     ap.add_argument("--overwrite", action="store_true", help="覆盖已存在的同名 .raw")
+    ap.add_argument("--auto-rotate", action="store_true",
+                    help="竖图自动逆时针旋转 90°，让画面尽量占满 320x240")
     ap.add_argument("-q", "--quiet", action="store_true", help="只报错误")
     args = ap.parse_args(argv)
 
@@ -256,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     opt = Options(
         out_root=Path(args.out) if args.out else None,
         overwrite=args.overwrite,
+        auto_rotate=args.auto_rotate,
         quiet=args.quiet,
         log=print,
     )
