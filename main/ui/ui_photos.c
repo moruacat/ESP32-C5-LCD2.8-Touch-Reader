@@ -26,7 +26,9 @@ static const char *TAG = "ui_photos";
  * 逐行建对象的话 500 张就是 1500+ 个，内部 RAM 扛不住。 */
 #define ROLLER_X    8
 #define ROLLER_W    304
-#define ROLLER_Y    30
+#define INDEX_Y     (UI_TITLEBAR_H + 2)
+#define INDEX_H     22
+#define ROLLER_Y    (INDEX_Y + INDEX_H + 4)
 /*! 滚轮可见行数：高度由它和行距算出，不写死 */
 #define ROLLER_ROWS 5
 
@@ -40,6 +42,8 @@ static const char *TAG = "ui_photos";
 
 static lv_obj_t  *s_root;           /*!< 页面根容器 */
 static lv_obj_t  *s_roller;         /*!< 列表滚轮 */
+static lv_obj_t  *s_index_btn;      /*!< 顶部序号按钮（点它快速跳转） */
+static lv_obj_t  *s_index_lb;       /*!< 序号文字 "12 / 345" */
 static lv_obj_t  *s_empty_lb;       /*!< 一张都没有时的提示 */
 static lv_obj_t  *s_open_btn;       /*!< 「打开」按钮（没照片时隐藏） */
 static lv_obj_t  *s_fs;             /*!< 全屏视图（盖住列表与标题栏） */
@@ -78,21 +82,25 @@ static uint8_t      *s_pre_data = NULL;     /*!< 预读好的像素缓冲 */
 static int           s_pre_idx  = -1;       /*!< 它是第几张 */
 static volatile bool s_pre_busy = false;    /*!< 任务正在读 */
 static volatile bool s_pre_alive = false;   /*!< 页面是否还在（销毁时置 false） */
+/*! 页面代号：快速「退出→再进」时旧的预读任务还在跑，靠它把过期结果丢掉 */
+static volatile uint32_t s_pre_gen = 0;
 
 static void pre_task(void *arg)
 {
-    int idx = (int)(intptr_t)arg;
+    const uint32_t packed = (uint32_t)(intptr_t)arg;
+    const uint32_t gen = packed >> 16;
+    const int      idx = (int)(packed & 0xFFFFu);
 
     uint8_t *data  = NULL;
     size_t   bytes = 0;
     bool     ok    = (srv_photo_load(idx, &data, &bytes) == ESP_OK);
 
-    if (ok && s_pre_alive) {
+    if (ok && s_pre_alive && gen == s_pre_gen) {
         free(s_pre_data);               /* 旧结果没人要了；free(NULL) 是安全的 */
         s_pre_data = data;
         s_pre_idx  = idx;
     } else if (ok) {
-        free(data);                     /* 页面早切走了，直接丢 */
+        free(data);                     /* 页面早切走了（或已换了新页面），直接丢 */
     }
 
     s_pre_busy = false;
@@ -110,8 +118,9 @@ static void pre_start(int idx)
     s_pre_idx  = -1;
 
     s_pre_busy = true;
+    const uint32_t packed = ((uint32_t)s_pre_gen << 16) | (uint32_t)(idx & 0xFFFF);
     if (xTaskCreate(pre_task, "photo_pre", PRE_TASK_STACK,
-                    (void *)(intptr_t)idx, 3, NULL) != pdPASS) {
+                    (void *)(intptr_t)packed, 3, NULL) != pdPASS) {
         s_pre_busy = false;
     }
 }
@@ -277,6 +286,30 @@ static int roller_sel(void)
     return (int)sel;
 }
 
+/* 按 UTF-8 码点截断，超出加省略号（roller 行不换行，按字节硬截会切出半个汉字） */
+static void utf8_shorten(char *dst, size_t cap, const char *src, int max_chars)
+{
+    size_t out = 0;
+    int    n = 0;
+    while (src[0] != '\0' && n < max_chars) {
+        const unsigned char c = (unsigned char)src[0];
+        const size_t step = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2
+                          : ((c & 0xF0) == 0xE0) ? 3 : 4;
+        if (out + step + 4 > cap) {
+            break;
+        }
+        memcpy(dst + out, src, step);
+        out += step;
+        src += step;
+        n++;
+    }
+    if (src[0] != '\0' && out + 4 <= cap) {
+        memcpy(dst + out, "…", 3);
+        out += 3;
+    }
+    dst[out] = '\0';
+}
+
 /* 把第 idx 张的像素读出来显示（列表侧的入口） */
 static void open_index(int idx)
 {
@@ -295,6 +328,73 @@ static void on_open_clicked(lv_event_t *e)
     open_index(roller_sel());
 }
 
+/* 顶部序号：滚轮选中项一变就更新 */
+static void update_index(void)
+{
+    if (s_index_lb == NULL || !lv_obj_is_valid(s_index_lb)) {
+        return;
+    }
+    int total = srv_photo_count();
+    char buf[32];
+    if (total <= 0) {
+        snprintf(buf, sizeof(buf), "0 / 0");
+    } else {
+        snprintf(buf, sizeof(buf), "%d / %d", roller_sel() + 1, total);
+    }
+    lv_label_set_text(s_index_lb, buf);
+}
+
+static void on_roller_changed(lv_event_t *e)
+{
+    (void)e;
+    update_index();
+}
+
+/* 点滚轮里的选中项直接打开。滚动拖动时 LVGL 不会发 SHORT_CLICKED，
+ * 所以不会出现「一滑就自动打开照片」；下方「打开」按钮仍保留。 */
+static void on_roller_short_clicked(lv_event_t *e)
+{
+    (void)e;
+    if (srv_photo_count() > 0) {
+        open_index(roller_sel());
+    }
+}
+
+/* 点顶部序号：输入数字直接跳过去（几百张时比一直滑快得多） */
+static char s_jump_title[48];
+
+static void on_jump_done(const char *text, void *arg)
+{
+    (void)arg;
+    if (s_roller == NULL || !lv_obj_is_valid(s_roller) || text == NULL) {
+        return;
+    }
+    int total = srv_photo_count();
+    if (total <= 0) {
+        return;                         /* 键盘还开着时页面被切走了 */
+    }
+    int n = atoi(text);
+    if (n < 1) {
+        n = 1;
+    }
+    if (n > total) {
+        n = total;
+    }
+    lv_roller_set_selected(s_roller, (uint32_t)(n - 1), LV_ANIM_OFF);
+    update_index();
+}
+
+static void on_index_clicked(lv_event_t *e)
+{
+    (void)e;
+    int total = srv_photo_count();
+    if (total <= 0) {
+        return;
+    }
+    snprintf(s_jump_title, sizeof(s_jump_title), "跳到第几张（1-%d）", total);
+    ui_text_input_show(s_jump_title, 4, on_jump_done, NULL);
+}
+
 static void list_build(void)
 {
     opts_free();
@@ -304,6 +404,7 @@ static void list_build(void)
     /* 一张都没有：把滚轮和按钮藏起来，显示提示 */
     if (total <= 0) {
         lv_obj_add_flag(s_roller, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_index_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_open_btn, LV_OBJ_FLAG_HIDDEN);
 
         lv_label_set_text(s_empty_lb, srv_sd_is_mounted()
@@ -313,6 +414,9 @@ static void list_build(void)
         return;
     }
 
+    /* 后台重扫完成时保持原来选中的那张，不要跳回第一张 */
+    const int keep = roller_sel();
+
     lv_obj_add_flag(s_empty_lb, LV_OBJ_FLAG_HIDDEN);
 
     /* 两趟走：先量总长再分配，比"按每项预留 N 字节"准 */
@@ -320,7 +424,7 @@ static void list_build(void)
     for (int i = 0; i < total; i++) {
         const srv_photo_t *p = NULL;
         if (srv_photo_get(i, &p) == ESP_OK) {
-            cap += strlen(p->name) + 16;    /* 名字 + "123/456  " + 换行 */
+            cap += strlen(p->name) + 16;    /* 名字 + 换行 */
         }
     }
 
@@ -335,14 +439,15 @@ static void list_build(void)
     }
 
     size_t pos = 0;
+    char   short_name[SRV_PHOTO_NAME_MAX];
     for (int i = 0; i < total; i++) {
         const srv_photo_t *p = NULL;
         if (srv_photo_get(i, &p) != ESP_OK) {
             continue;
         }
-        /* 序号放前面，滚动时一眼能看出是第几张 */
-        pos += (size_t)snprintf(s_opts + pos, cap - pos, "%d/%d  %s\n",
-                                i + 1, total, p->name);
+        /* 行内只留文件名（序号已经在顶部单独显示），太长截断加省略号 */
+        utf8_shorten(short_name, sizeof(short_name), p->name, 22);
+        pos += (size_t)snprintf(s_opts + pos, cap - pos, "%s\n", short_name);
     }
     if (pos > 0) {
         s_opts[pos - 1] = '\0';             /* 去掉末尾换行 */
@@ -351,10 +456,20 @@ static void list_build(void)
     /* 注意：不能用 lv_obj_clean(s_roller) 重建 —— 滚轮自身就是那个对象，
      * 清子对象会把它一起弄坏。换选项走 lv_roller_set_options 即可。 */
     lv_roller_set_options(s_roller, s_opts, LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_selected(s_roller, 0, LV_ANIM_OFF);
+
+    int sel = keep;
+    if (sel >= total) {
+        sel = total - 1;
+    }
+    if (sel < 0) {
+        sel = 0;
+    }
+    lv_roller_set_selected(s_roller, (uint32_t)sel, LV_ANIM_OFF);
 
     lv_obj_remove_flag(s_roller, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_index_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_open_btn, LV_OBJ_FLAG_HIDDEN);
+    update_index();
 }
 
 /* ===================== 页面 ===================== */
@@ -392,6 +507,8 @@ static void photos_root_del_cb(lv_event_t *e)
     pre_stop();
     s_root     = NULL;
     s_roller   = NULL;
+    s_index_btn = NULL;
+    s_index_lb = NULL;
     s_empty_lb = NULL;
     s_open_btn = NULL;
     s_fs       = NULL;
@@ -404,6 +521,23 @@ void ui_photos_create(lv_obj_t *root)
     s_root = root;
 
     ui_titlebar_create(root, "照片", app_navigator_back_smart_cb, NULL);
+
+    /* ===== 顶部当前序号：点它输入数字直接跳转 ===== */
+    s_index_btn = lv_button_create(root);
+    lv_obj_set_size(s_index_btn, 132, INDEX_H);
+    lv_obj_align(s_index_btn, LV_ALIGN_TOP_MID, 0, INDEX_Y);
+    lv_obj_set_style_radius(s_index_btn, 6, 0);
+    lv_obj_set_style_bg_color(s_index_btn, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(s_index_btn, 0, 0);
+    lv_obj_set_style_pad_all(s_index_btn, 0, 0);
+    ui_add_click_feedback(s_index_btn);
+    lv_obj_add_event_cb(s_index_btn, on_index_clicked, LV_EVENT_CLICKED, NULL);
+
+    s_index_lb = lv_label_create(s_index_btn);
+    lv_obj_set_style_text_font(s_index_lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(s_index_lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(s_index_lb, "0 / 0");
+    lv_obj_center(s_index_lb);
 
     /* ===== 列表视图：一个滚轮承载全部照片（同阅读器章节列表的思路） ===== */
     s_roller = lv_roller_create(root);
@@ -422,6 +556,8 @@ void ui_photos_create(lv_obj_t *root)
     lv_obj_set_style_bg_opa(s_roller, LV_OPA_COVER, LV_PART_SELECTED);
     lv_obj_set_style_text_color(s_roller, lv_color_white(), LV_PART_SELECTED);
     lv_obj_set_style_radius(s_roller, 6, LV_PART_SELECTED);
+    lv_obj_add_event_cb(s_roller, on_roller_changed, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_roller, on_roller_short_clicked, LV_EVENT_SHORT_CLICKED, NULL);
 
     /* 「打开」按钮：滚轮定位到哪一张就开哪张 */
     s_open_btn = lv_button_create(root);
@@ -480,7 +616,9 @@ void ui_photos_create(lv_obj_t *root)
 
     lv_obj_add_event_cb(root, photos_root_del_cb, LV_EVENT_DELETE, NULL);
 
-    /* 预读标志要在建完 UI 之后打开：任务起来得先确认页面还在 */
+    /* 预读标志要在建完 UI 之后打开：任务起来得先确认页面还在。
+     * 代号先自增：上一次退出时可能还有预读任务在跑，它的结果按代号丢掉。 */
+    s_pre_gen++;
     s_pre_alive = true;
 
     /* 先用现有条目把列表显示出来（进页面不再等扫描） */

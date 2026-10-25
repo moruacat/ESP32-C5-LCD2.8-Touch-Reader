@@ -386,4 +386,11 @@ void ui_clock_create(lv_obj_t *root)
     /* ===== 每秒刷新（随页面销毁自动删除） ===== */
     lv_timer_t *tmr = lv_timer_create(clock_refresh_timer, 1000, NULL);
     lv_obj_add_event_cb(root, clock_root_del_cb, LV_EVENT_DELETE, tmr);
+
+    /* 页面一建好就主动刷一次：不能等 1 秒后的第一次定时器，否则从别的页面
+     * 返回时先看到 "00:00"、日期 "----"、温湿度 "--"，要等一秒才恢复。
+     * s_refresh_cnt 置 4 让这次调用顺便把电量/温湿度也读一遍（下一拍归零，
+     * 之后仍按 5 秒周期）；页面重建时 static 里残留的计数也一并覆盖掉。 */
+    s_refresh_cnt = 4;
+    clock_refresh_timer(NULL);
 }
