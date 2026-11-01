@@ -676,13 +676,40 @@ static void reader_released_cb(lv_event_t *e)
 #define GOTO_DIGITS_MAX 10
 #define GOTO_DIGITS_BUF (GOTO_DIGITS_MAX + 1)
 
+/* ===================== 章节列表：自建虚拟列表 =====================
+ *
+ * 原来用 lv_roller_set_options 把**整本书的章名**拼成一个大字符串塞进去，
+ * roller 内部要对这串文本整体做行高/换行计算，几千章就是 O(n) 的文本处理 ——
+ * 打开弹层要等数百毫秒到几秒，滑动时也要在大文本里定位。
+ *
+ * 改成虚拟列表：只建 GOTO_ROWS 个行对象，任何时候屏幕上显示的都是这十几个对象，
+ * 滚动/输入只是「按索引改文本 + 挪坐标」，任何一次操作都是 O(1)，与章数无关。
+ *
+ * 滚动是自己管的（容器**没有** SCROLLABLE 标志）：行的坐标由 s_goto_pos 换算，
+ * 这样不受 LVGL 滚动条/弹性/链条那一套影响，也不必给列表造一个虚拟高度。
+ */
+#define GOTO_ROW_H      28      /*!< 每行高度 */
+/*! 同时存在的行数：可见 6 行（172/28）+ 2 行缓冲，滚动中途不会露白 */
+#define GOTO_ROWS       (GOTO_LIST_H / GOTO_ROW_H + 2)
+
 static lv_obj_t *s_goto_mask;
 static lv_obj_t *s_goto_input;          /*!< 顶部输入显示 */
-static lv_obj_t *s_goto_roller;         /*!< EBF 的章节滚轮；TXT 为 NULL */
-static char     *s_goto_opts;           /*!< 滚轮选项文本（PSRAM/堆，弹层关掉时释放） */
+static lv_obj_t *s_goto_list;           /*!< EBF 的章节虚拟列表容器；TXT 为 NULL */
 static char      s_goto_digits[GOTO_DIGITS_BUF];
 static int       s_goto_digit_n;
 static int       s_goto_input_max = 4;  /*!< 本次允许输入的位数 */
+
+static lv_obj_t *s_goto_rows[GOTO_ROWS];    /*!< 复用的行对象（行高亮 + 文字） */
+static lv_obj_t *s_goto_row_lbs[GOTO_ROWS]; /*!< 每行里的标签 */
+static int       s_goto_row_idx[GOTO_ROWS]; /*!< 该行当前显示的章索引，-1 = 空行 */
+static int       s_goto_cnt;                /*!< 章节总数（开弹层时取一次，之后只读） */
+static int       s_goto_sel;                /*!< 当前选中的章索引 */
+static int       s_goto_top;                /*!< 窗口顶部对应的章索引（刷新时算出来） */
+static int32_t   s_goto_pos;                /*!< 顶部相对第 0 章的像素偏移 */
+static int32_t   s_goto_pos_max;             /*!< 偏移上限：滚到最后一章 */
+static bool      s_goto_dragging;           /*!< 本次触摸是拖动（用来区分点击与滑动） */
+static bool      s_goto_moved;              /*!< 本次触摸有没有真的拖动过 */
+static bool      s_goto_refreshing;         /*!< 刷新重入保护 */
 
 /* 十进制位数：1 → 1，10 → 2（数章节号/页码要几位） */
 static int dec_digits(int v)
@@ -696,6 +723,7 @@ static int dec_digits(int v)
 }
 
 static void goto_close(void);
+static void goto_input_refresh(void);
 /* 换章后要改标题栏（EBF 显示当前章名），实现在下面的标题栏那一节 */
 static void reader_update_title(void);
 
@@ -709,12 +737,18 @@ static void goto_del_cb(lv_event_t *e)
     }
     s_goto_mask    = NULL;
     s_goto_input   = NULL;
-    s_goto_roller  = NULL;
+    s_goto_list    = NULL;              /* 行对象随容器一起被删掉，这里只清指针 */
     s_goto_digit_n = 0;
     s_goto_digits[0] = '\0';
 
-    free(s_goto_opts);                  /* 滚轮自己存了一份，这里只是还缓冲 */
-    s_goto_opts = NULL;
+    for (int i = 0; i < GOTO_ROWS; i++) {
+        s_goto_rows[i]    = NULL;
+        s_goto_row_lbs[i] = NULL;
+        s_goto_row_idx[i] = -1;
+    }
+    s_goto_dragging = false;
+    s_goto_moved    = false;
+    s_goto_pos      = 0;
 }
 
 static void goto_close(void)
@@ -730,7 +764,166 @@ static void goto_cancel_cb(lv_event_t *e)
     goto_close();
 }
 
-/* 输入框显示：没输入时显示当前定位（EBF 是滚轮选中项，TXT 是当前页） */
+/* ===================== 章节虚拟列表：滚动与刷新 ===================== */
+
+/* 滚出列表范围的行由 LVGL 自动裁掉（子对象默认被父对象裁剪），不用自己藏 */
+
+static void goto_scroll_clamp(void)
+{
+    if (s_goto_pos < 0) {
+        s_goto_pos = 0;
+    }
+    if (s_goto_pos > s_goto_pos_max) {
+        s_goto_pos = s_goto_pos_max;
+    }
+}
+
+/**
+ * @brief 按当前 s_goto_pos 刷新这几行的文字、位置和高亮
+ *
+ * 只在「滚动/定位/选中变了」时调，一次最多动 GOTO_ROWS 个对象，
+ * 跟章节总数无关 —— 这是打开和滑动都不卡的关键。
+ */
+static void goto_list_refresh(void)
+{
+    if (s_goto_list == NULL || s_goto_refreshing) {
+        return;
+    }
+    s_goto_refreshing = true;
+
+    int top  = (int)(s_goto_pos / GOTO_ROW_H);
+    int frac = (int)(s_goto_pos - (int32_t)top * GOTO_ROW_H);
+    if (top < 0) {
+        top  = 0;
+        frac = 0;
+    }
+    s_goto_top = top;
+
+    char title[CHAP_TITLE_MAX];
+    char buf[CHAP_TITLE_MAX + 16];
+
+    for (int i = 0; i < GOTO_ROWS; i++) {
+        lv_obj_t *row = s_goto_rows[i];
+        int idx = top + i;
+
+        if (idx >= 0 && idx < s_goto_cnt) {
+            srv_reader_chapter_title(idx, title, sizeof(title));
+            snprintf(buf, sizeof(buf), "%d. %s", idx + 1, title);
+            lv_label_set_text(s_goto_row_lbs[i], buf);
+            /* 位置是相对列表内容区的手动换算：第 i 行落在 i*行高 - 余数 */
+            lv_obj_set_pos(row, 0, (lv_coord_t)(i * GOTO_ROW_H - frac));
+            lv_obj_remove_flag(row, LV_OBJ_FLAG_HIDDEN);
+            s_goto_row_idx[i] = idx;
+        } else {
+            lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+            s_goto_row_idx[i] = -1;
+        }
+
+        bool sel = (s_goto_row_idx[i] >= 0 && s_goto_row_idx[i] == s_goto_sel);
+        lv_obj_set_style_bg_opa(row, sel ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_text_color(s_goto_row_lbs[i],
+                                   sel ? lv_color_white() : UI_COLOR_TEXT_DIM, 0);
+    }
+
+    s_goto_refreshing = false;
+}
+
+/* 把选中章滚到窗口中间（键盘输章节号之后用） */
+static void goto_scroll_to_sel(void)
+{
+    if (s_goto_list == NULL) {
+        return;
+    }
+    int vis = GOTO_LIST_H / GOTO_ROW_H;     /* 一屏几行 */
+    int32_t top = (int32_t)s_goto_sel - vis / 2;
+    if (top < 0) {
+        top = 0;
+    }
+    s_goto_pos = top * GOTO_ROW_H;
+    goto_scroll_clamp();
+}
+
+static void goto_list_pressed(lv_event_t *e)
+{
+    (void)e;
+    s_goto_dragging = true;
+    s_goto_moved    = false;            /* 每次按下都重新判定 */
+}
+
+static void goto_list_pressing(lv_event_t *e)
+{
+    (void)e;
+    if (!s_goto_dragging) {
+        return;
+    }
+
+    /* vect 是「相对上一次事件」的位移，累加到 s_goto_pos 上比记绝对坐标省事，
+     * 也不会因为手指滑出列表区域而跳变 */
+    lv_indev_t *indev = lv_indev_active();
+    if (indev == NULL) {
+        return;
+    }
+    lv_point_t v;
+    lv_indev_get_vect(indev, &v);
+    if (v.y == 0) {
+        return;
+    }
+
+    s_goto_moved = true;
+    s_goto_pos  -= v.y;                 /* 手指往下拉 → 内容往上走，看到更前面的章 */
+    goto_scroll_clamp();
+    goto_list_refresh();
+}
+
+static void goto_list_released(lv_event_t *e)
+{
+    (void)e;
+    s_goto_dragging = false;
+
+    /* 拖动过就吸附到整行；没拖动的交给 CLICKED 当点击处理 */
+    if (!s_goto_moved) {
+        return;
+    }
+    s_goto_pos = (s_goto_pos + GOTO_ROW_H / 2) / GOTO_ROW_H * GOTO_ROW_H;
+    goto_scroll_clamp();
+    goto_list_refresh();
+}
+
+/* 点一行 = 选中它（再点「确定」才真的跳章，跟原来的滚轮行为一致） */
+static void goto_list_clicked(lv_event_t *e)
+{
+    (void)e;
+
+    if (s_goto_moved) {
+        s_goto_moved = false;           /* 这是拖动收尾带来的点击，忽略 */
+        return;
+    }
+
+    lv_indev_t *indev = lv_indev_active();
+    if (indev == NULL || s_goto_list == NULL) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);      /* 屏幕坐标 */
+    lv_area_t a;
+    lv_obj_get_coords(s_goto_list, &a);
+
+    int y    = (int)(p.y - a.y1);
+    int frac = (int)(s_goto_pos - (int32_t)s_goto_top * GOTO_ROW_H);
+    int i    = (y + frac) / GOTO_ROW_H;
+    if (i < 0) {
+        i = 0;
+    }
+    if (i >= GOTO_ROWS || s_goto_row_idx[i] < 0) {
+        return;
+    }
+
+    s_goto_sel = s_goto_row_idx[i];
+    goto_list_refresh();
+    goto_input_refresh();
+}
+
+/* 输入框显示：没输入时显示当前定位（EBF 是列表选中项，TXT 是当前页） */
 static void goto_input_refresh(void)
 {
     if (s_goto_input == NULL) {
@@ -740,10 +933,9 @@ static void goto_input_refresh(void)
     char buf[32];
     if (s_goto_digit_n > 0) {
         snprintf(buf, sizeof(buf), "第 %s %s", s_goto_digits,
-                 (s_goto_roller != NULL) ? "章" : "页");
-    } else if (s_goto_roller != NULL) {
-        snprintf(buf, sizeof(buf), "第 %d 章",
-                 (int)lv_roller_get_selected(s_goto_roller) + 1);
+                 (s_goto_list != NULL) ? "章" : "页");
+    } else if (s_goto_list != NULL) {
+        snprintf(buf, sizeof(buf), "第 %d 章", s_goto_sel + 1);
     } else {
         snprintf(buf, sizeof(buf), "第 %d 页", s_page_cur + 1);
     }
@@ -779,11 +971,11 @@ static void goto_page_jump(int page)
 /* EBF：输入数字就是「在列表里定位」，不是直接进去 */
 static void goto_locate(void)
 {
-    if (s_goto_roller == NULL) {
+    if (s_goto_list == NULL) {
         return;
     }
 
-    int cnt = srv_reader_chapter_count();
+    int cnt = s_goto_cnt;               /* 开弹层时取的，之后只读 */
     if (cnt <= 0) {
         return;
     }
@@ -798,7 +990,9 @@ static void goto_locate(void)
         v = cnt;
     }
 
-    lv_roller_set_selected(s_goto_roller, (uint32_t)(v - 1), LV_ANIM_OFF);
+    s_goto_sel = (int)(v - 1);
+    goto_scroll_to_sel();               /* 把这一章滚到窗口中间 */
+    goto_list_refresh();
 }
 
 static void goto_digit_cb(lv_event_t *e)
@@ -827,9 +1021,9 @@ static void goto_ok_cb(lv_event_t *e)
 {
     (void)e;
 
-    if (s_goto_roller != NULL) {
-        /* 章节号已经在输入时定位到滚轮上了，这里就是确认进去 */
-        goto_chapter_jump((int)lv_roller_get_selected(s_goto_roller));
+    if (s_goto_list != NULL) {
+        /* 章节号在输入时已经定位到列表上了，这里就是确认进去 */
+        goto_chapter_jump(s_goto_sel);
         return;
     }
 
@@ -883,8 +1077,11 @@ static void goto_build_keypad(lv_obj_t *box, lv_coord_t x0, lv_coord_t y0,
     }
 }
 
-/* EBF 的章节列表：用滚轮而不是逐章建对象 —— 上千章会建出几千个 LVGL 对象，
- * 内部 RAM 扛不住；滚轮的选项只是一个字符串，还能原生支持滚动定位 */
+/* EBF 的章节列表：自建虚拟列表（常量与取舍见上面的长注释）。
+ *
+ * 只建 GOTO_ROWS 个行对象，滚动/定位时复用改文本 —— 打开与滑动都是 O(1)，
+ * 与章节总数无关。行对象刻意**不带 CLICKABLE**，按压/拖动事件统一落到容器上，
+ * 免得手指压在某一行的文字上时事件目标在行与容器之间来回跳。 */
 static bool goto_build_chapters(lv_obj_t *box)
 {
     int cnt = srv_reader_chapter_count();
@@ -892,59 +1089,64 @@ static bool goto_build_chapters(lv_obj_t *box)
         return false;
     }
 
-    char title[CHAP_TITLE_MAX];
+    lv_obj_t *list = lv_obj_create(box);
+    lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLLABLE);   /* 滚动自己管，不用 LVGL 那套 */
+    lv_obj_add_flag(list, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(list, GOTO_LIST_W, GOTO_LIST_H);
+    lv_obj_set_pos(list, 8, 36);
+    lv_obj_set_style_bg_color(list, UI_COLOR_BG, 0);
+    lv_obj_set_style_border_width(list, 0, 0);
+    lv_obj_set_style_radius(list, 8, 0);
+    lv_obj_set_style_pad_all(list, 0, 0);
+    lv_obj_add_event_cb(list, goto_list_pressed,  LV_EVENT_PRESSED,  NULL);
+    lv_obj_add_event_cb(list, goto_list_pressing, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(list, goto_list_released, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(list, goto_list_clicked,  LV_EVENT_CLICKED,  NULL);
 
-    /* 每项一行，内容是**真章名**（索引里查，纯内存）。两趟走：先量总长再分配，
-     * 比"按每项预留 N 字节"准，也不会把列表尾巴截掉。 */
-    size_t cap = 8;
-    for (int i = 0; i < cnt; i++) {
-        srv_reader_chapter_title(i, title, sizeof(title));
-        cap += strlen(title) + 1;
-    }
-
-    /* 章数不设上限，几千章就是几十 KB，内部 RAM 不一定给得出 → 先试 PSRAM */
-    s_goto_opts = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_goto_opts == NULL) {
-        s_goto_opts = malloc(cap);
-    }
-    if (s_goto_opts == NULL) {
-        return false;
-    }
-
-    size_t p = 0;
-    for (int i = 0; i < cnt; i++) {
-        srv_reader_chapter_title(i, title, sizeof(title));
-        p += (size_t)snprintf(s_goto_opts + p, cap - p, "%s\n", title);
-    }
-    if (p > 0) {
-        s_goto_opts[p - 1] = '\0';                  /* 去掉末尾的换行 */
-    }
-
-    lv_obj_t *r = lv_roller_create(box);
-    lv_roller_set_options(r, s_goto_opts, LV_ROLLER_MODE_NORMAL);
-    lv_obj_set_size(r, GOTO_LIST_W, GOTO_LIST_H);
-    lv_obj_set_pos(r, 8, 36);
-    lv_obj_set_style_bg_color(r, UI_COLOR_BG, 0);
-    lv_obj_set_style_border_width(r, 0, 0);
-    lv_obj_set_style_radius(r, 8, 0);
-    lv_obj_set_style_pad_all(r, 0, 0);
-    lv_obj_set_style_text_font(r, &font_ui_14, 0);
-    lv_obj_set_style_text_color(r, UI_COLOR_TEXT_DIM, 0);
-    /* 行距要在算高度之前设好 */
-    lv_obj_set_style_text_line_space(r, 6, 0);
-    lv_roller_set_visible_row_count(r, 6);
-    lv_obj_set_style_bg_color(r, UI_COLOR_PRIMARY, LV_PART_SELECTED);
-    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_PART_SELECTED);
-    lv_obj_set_style_text_color(r, lv_color_white(), LV_PART_SELECTED);
-    lv_obj_set_style_radius(r, 6, LV_PART_SELECTED);
+    s_goto_list = list;
+    s_goto_cnt  = cnt;
 
     int cur = srv_reader_chapter_index();
     if (cur < 0 || cur >= cnt) {
         cur = 0;
     }
-    lv_roller_set_selected(r, (uint32_t)cur, LV_ANIM_OFF);
+    s_goto_sel = cur;
 
-    s_goto_roller = r;
+    /* 行对象只在这里建一次，之后全程复用；超出列表范围的行由 LVGL 自动裁剪 */
+    for (int i = 0; i < GOTO_ROWS; i++) {
+        lv_obj_t *row = lv_obj_create(list);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);  /* 按压落到容器上 */
+        lv_obj_set_size(row, GOTO_LIST_W, GOTO_ROW_H);
+        lv_obj_set_pos(row, 0, (lv_coord_t)(i * GOTO_ROW_H));
+        lv_obj_set_style_bg_color(row, UI_COLOR_PRIMARY, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_radius(row, 6, 0);
+        lv_obj_set_style_pad_left(row, 8, 0);
+        lv_obj_set_style_pad_right(row, 4, 0);
+
+        lv_obj_t *lb = lv_label_create(row);
+        lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+        lv_obj_set_style_text_color(lb, UI_COLOR_TEXT_DIM, 0);
+        lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);   /* 长章名省略号收尾 */
+        lv_obj_set_width(lb, GOTO_LIST_W - 12);
+        lv_label_set_text(lb, "");
+        lv_obj_align(lb, LV_ALIGN_LEFT_MID, 0, 0);
+
+        s_goto_rows[i]    = row;
+        s_goto_row_lbs[i] = lb;
+        s_goto_row_idx[i] = -1;
+    }
+
+    /* 偏移上限：滚到底时最后一行刚好吃满列表底边 */
+    s_goto_pos_max = cnt * GOTO_ROW_H - GOTO_LIST_H;
+    if (s_goto_pos_max < 0) {
+        s_goto_pos_max = 0;
+    }
+
+    goto_scroll_to_sel();               /* 开机定位到正在读的章 */
+    goto_list_refresh();
     return true;
 }
 

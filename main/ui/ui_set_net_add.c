@@ -2,6 +2,7 @@
 #include "ui_common.h"
 #include "ui_icons.h"
 #include "ui_dialog.h"
+#include "ui_ime.h"                   /* 手动输入 SSID 用中文输入层 */
 #include "app_navigator.h"
 #include "srv_wifi.h"
 
@@ -18,8 +19,9 @@ static const char *TAG = "ui_net_add";
 
 /*! 扫描结果上限：一屏放不下就滚动，24 条够用 */
 #define AP_MAX       24
-/*! 列表第 0 行固定是「扫描网络」，热点从第 1 行往下排 */
-#define AP_ROW_BASE  1
+/*! 列表前两行是固定的（第 0 行「扫描网络」、第 1 行「手动添加网络」），
+ *  热点从第 2 行往下排 */
+#define AP_ROW_BASE  2
 
 /*! 扫描重试：射频忙（连接中、上一次扫描没收尾）时会直接失败，多试几次
  *  比让用户跑出去把网络关了再开强；空结果也重试一次，免得一帧没收到就报"未发现" */
@@ -61,6 +63,35 @@ static void on_pass_input(const char *text, void *arg)
     connect_to((const char *)arg, text);
 }
 
+/* ===================== 手动添加（隐藏热点 / 中文名） ===================== */
+
+/* SSID 先抄进这里再问密码。列表里的 ap->ssid 也一直有效，但那是"扫出来的"，
+ * 手动这条没有对应的热点条目，用一个静态缓冲区最省事 */
+static char s_manual_ssid[SRV_WIFI_SSID_MAX];
+
+/* 名字输完了（空名字没法连，直接忽略） */
+static void on_manual_ssid(const char *text, void *arg)
+{
+    (void)arg;
+
+    if (text == NULL || text[0] == '\0') {
+        return;
+    }
+    snprintf(s_manual_ssid, sizeof(s_manual_ssid), "%s", text);
+
+    /* SSID 可能带中文（汉字 Wi-Fi 很常见），所以密码层也走中文输入层 */
+    char title[SRV_WIFI_SSID_MAX + 16];
+    snprintf(title, sizeof(title), "密码：%s", s_manual_ssid);
+    ui_ime_text_input_show(title, SRV_WIFI_PASS_MAX - 1, on_pass_input, s_manual_ssid);
+}
+
+/* 点「手动添加网络」那行：先问名字，名字有了再问密码 */
+static void on_manual_add(lv_event_t *e)
+{
+    (void)e;
+    ui_ime_text_input_show("网络名称", SRV_WIFI_SSID_MAX - 1, on_manual_ssid, NULL);
+}
+
 static void on_ap_click(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
@@ -79,7 +110,7 @@ static void on_ap_click(lv_event_t *e)
     char title[SRV_WIFI_SSID_MAX + 16];
     snprintf(title, sizeof(title), "密码：%s", ap->ssid);
     /* arg 指向 s_aps 里的 SSID：输密码时列表被弹层压着，扫不了也不会重排 */
-    ui_text_input_show(title, SRV_WIFI_PASS_MAX - 1, on_pass_input, (void *)ap->ssid);
+    ui_ime_text_input_show(title, SRV_WIFI_PASS_MAX - 1, on_pass_input, (void *)ap->ssid);
 }
 
 /* ===================== 扫描 ===================== */
@@ -148,10 +179,10 @@ static void list_fill(void)
         return;
     }
 
-    /* 从第 1 个孩子往后删：第 0 行是「扫描网络」，重建往往就是点它触发的，
-     * 没必要把正在派发事件的控件删掉 */
-    while (lv_obj_get_child_count(s_list) > 1) {
-        lv_obj_delete(lv_obj_get_child(s_list, 1));
+    /* 从 AP_ROW_BASE 往后删：前面那几行是固定行（扫描 / 手动添加），
+     * 重建往往就是点其中一行触发的，没必要把正在派发事件的控件删掉 */
+    while (lv_obj_get_child_count(s_list) > AP_ROW_BASE) {
+        lv_obj_delete(lv_obj_get_child(s_list, AP_ROW_BASE));
     }
 
     for (int i = 0; i < s_ap_count; i++) {
@@ -272,6 +303,16 @@ void ui_set_net_add_create(lv_obj_t *root)
     lv_obj_add_event_cb(row, on_rescan, LV_EVENT_CLICKED, NULL);
     s_scan_state = ui_row_value_create(row, -12, 96);
     lv_obj_set_style_text_color(s_scan_state, UI_COLOR_TEXT_DIM, 0);
+
+    /* 第 1 行：手动输入网络名。隐藏热点（不广播 SSID）扫不出来，中文名的热点
+     * 也未必能在下面那串里认出来，都从这儿进。
+     * 必须排在扫描行后面建：删除/重建热点行是按孩子下标来的 */
+    lv_obj_t *man = ui_row_create(s_list, UI_ROW_Y(1), &ic_wifi, "手动添加网络");
+    ui_add_click_feedback(man);
+    lv_obj_add_event_cb(man, on_manual_add, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *man_hint = ui_row_value_create(man, -12, 96);
+    lv_label_set_text(man_hint, "输入名称");
+    lv_obj_set_style_text_color(man_hint, UI_COLOR_TEXT_DIM, 0);
 
     scan_start();               /* 里面会把状态文字刷成「扫描中…」 */
 }

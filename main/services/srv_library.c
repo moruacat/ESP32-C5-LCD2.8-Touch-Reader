@@ -1,6 +1,8 @@
 #include "srv_library.h"
 
 #include "srv_sd.h"
+#include "srv_config.h"
+#include "srv_recent.h"
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -384,6 +386,40 @@ static void others_load(void)
 
 /* ===================== 对外接口 ===================== */
 
+/* 最近阅读优先：读过的按时间倒序排前面，没读过的保持扫描顺序。
+ * 只在开关打开时排；书架最多 48 本，扫描时排一次足够。 */
+static int recent_rank_cmp(const srv_book_t *a, const srv_book_t *b)
+{
+    const int64_t ta = srv_recent_time(a->path);
+    const int64_t tb = srv_recent_time(b->path);
+    if (ta > 0 && tb > 0) {
+        return (ta > tb) ? -1 : ((ta < tb) ? 1 : 0);
+    }
+    if (ta > 0) {
+        return -1;
+    }
+    if (tb > 0) {
+        return 1;
+    }
+    return 0;                           /* 都没读过：保持原顺序 */
+}
+
+static void library_sort_recent(void)
+{
+    if (s_count < 2 || srv_config_get_int(CFG_SHELF_RECENT, CFG_DEF_SHELF_RECENT) == 0) {
+        return;
+    }
+    for (int i = 0; i < s_count - 1; i++) {
+        for (int j = i + 1; j < s_count; j++) {
+            if (recent_rank_cmp(&s_books[j], &s_books[i]) < 0) {
+                srv_book_t tmp = s_books[i];
+                s_books[i] = s_books[j];
+                s_books[j] = tmp;
+            }
+        }
+    }
+}
+
 esp_err_t srv_library_scan(void)
 {
     if (alloc_books() != ESP_OK) {
@@ -405,6 +441,10 @@ esp_err_t srv_library_scan(void)
 
     /* 合并外部书籍清单 */
     others_load();
+
+    /* 最近阅读记录先加载，再按开关把读过的书排到前面 */
+    (void)srv_recent_init();
+    library_sort_recent();
 
     ESP_LOGI(TAG, "书架扫描完成：%s 下 %d 本，外部 %d 本，共 %d 本",
              srv_library_root(), from_books, s_count - from_books, s_count);

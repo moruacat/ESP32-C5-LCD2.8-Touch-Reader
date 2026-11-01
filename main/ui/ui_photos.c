@@ -35,6 +35,18 @@ static const char *TAG = "ui_photos";
 #define BTN_W       110
 #define BTN_H       30
 
+/* ===== 缩略图网格：一页 4x2 = 8 张，翻页切换 =====
+ * 逐张缩略图从原图（320x240 RGB565）最近邻采样到 72x54，一页 8 张约 62KB PSRAM。
+ * 只建 8 个图片对象，几百张照片也不会把 LVGL 对象数撑爆。 */
+#define GRID_COLS   4
+#define GRID_ROWS   2
+#define GRID_PAGE   (GRID_COLS * GRID_ROWS)
+#define CELL_W      76
+#define CELL_H      66
+#define THUMB_W     72
+#define THUMB_H     54
+#define GRID_Y      (ROLLER_Y)
+
 /*! 预读任务的栈：里面有 fopen/fread（SD 卡驱动也要用栈） */
 #define PRE_TASK_STACK  4096
 
@@ -53,6 +65,18 @@ static lv_obj_t  *s_fs_name;        /*!< 全屏底部的文件名 + 序号 */
 static uint8_t   *s_data;           /*!< 当前全屏照片的像素缓冲 */
 static lv_image_dsc_t s_dsc;        /*!< 复用同一个 dsc，关掉时必须丢缓存 */
 static int        s_idx;            /*!< 当前全屏的是第几张 */
+
+/* 网格 */
+static lv_obj_t      *s_grid;
+static lv_obj_t      *s_grid_img[GRID_PAGE];
+static lv_obj_t      *s_grid_no[GRID_PAGE];
+static lv_image_dsc_t s_grid_dsc[GRID_PAGE];
+static uint8_t       *s_grid_buf[GRID_PAGE];
+static int            s_page;
+static int            s_page_count;
+static lv_obj_t      *s_page_lb;
+
+static void grid_show_page(int page);   /* 全屏退出时要把网格翻到当前页 */
 
 /* 滑动判定 */
 static lv_point_t s_press_pt;
@@ -206,9 +230,9 @@ static void fs_exit(void)
     lv_obj_add_flag(s_fs, LV_OBJ_FLAG_HIDDEN);
     fs_free();
 
-    /* 全屏里左右滑过之后，列表滚轮要跟着停在当前这张上 */
-    if (s_roller != NULL && lv_obj_is_valid(s_roller) && srv_photo_count() > 0) {
-        lv_roller_set_selected(s_roller, (uint32_t)s_idx, LV_ANIM_OFF);
+    /* 全屏里左右滑过之后，网格要翻到当前这张所在的页 */
+    if (srv_photo_count() > 0) {
+        grid_show_page(s_idx / GRID_PAGE);
     }
 }
 
@@ -287,29 +311,6 @@ static int roller_sel(void)
 }
 
 /* 按 UTF-8 码点截断，超出加省略号（roller 行不换行，按字节硬截会切出半个汉字） */
-static void utf8_shorten(char *dst, size_t cap, const char *src, int max_chars)
-{
-    size_t out = 0;
-    int    n = 0;
-    while (src[0] != '\0' && n < max_chars) {
-        const unsigned char c = (unsigned char)src[0];
-        const size_t step = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2
-                          : ((c & 0xF0) == 0xE0) ? 3 : 4;
-        if (out + step + 4 > cap) {
-            break;
-        }
-        memcpy(dst + out, src, step);
-        out += step;
-        src += step;
-        n++;
-    }
-    if (src[0] != '\0' && out + 4 <= cap) {
-        memcpy(dst + out, "…", 3);
-        out += 3;
-    }
-    dst[out] = '\0';
-}
-
 /* 把第 idx 张的像素读出来显示（列表侧的入口） */
 static void open_index(int idx)
 {
@@ -326,6 +327,136 @@ static void on_open_clicked(lv_event_t *e)
 {
     (void)e;
     open_index(roller_sel());
+}
+
+/* ===================== 缩略图网格 ===================== */
+
+static void open_index(int idx);        /* 实现在全屏视图一节后面 */
+
+static void grid_free(void)
+{
+    for (int i = 0; i < GRID_PAGE; i++) {
+        if (s_grid_buf[i] != NULL) {
+            lv_image_cache_drop(&s_grid_dsc[i]);
+            free(s_grid_buf[i]);
+            s_grid_buf[i] = NULL;
+        }
+    }
+}
+
+/* 最近邻采样：320x240 RGB565 -> 72x54 */
+static void thumb_make(const uint8_t *src, uint8_t *dst)
+{
+    for (int y = 0; y < THUMB_H; y++) {
+        const int sy = y * SRV_PHOTO_H / THUMB_H;
+        const uint8_t *row = src + (size_t)sy * SRV_PHOTO_W * 2;
+        for (int x = 0; x < THUMB_W; x++) {
+            const int sx = x * SRV_PHOTO_W / THUMB_W;
+            const uint8_t *p = row + sx * 2;
+            *dst++ = p[0];
+            *dst++ = p[1];
+        }
+    }
+}
+
+static void grid_fill_page(int page)
+{
+    const int total = srv_photo_count();
+    const int base = page * GRID_PAGE;
+
+    for (int i = 0; i < GRID_PAGE; i++) {
+        const int idx = base + i;
+        if (idx >= total) {
+            lv_obj_add_flag(s_grid_img[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_grid_no[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+
+        if (s_grid_buf[i] == NULL) {
+            s_grid_buf[i] = heap_caps_malloc(THUMB_W * THUMB_H * 2,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (s_grid_buf[i] == NULL) {
+                s_grid_buf[i] = malloc(THUMB_W * THUMB_H * 2);
+            }
+        }
+        if (s_grid_buf[i] == NULL) {
+            lv_obj_add_flag(s_grid_img[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+
+        uint8_t *src = NULL;
+        size_t   bytes = 0;
+        if (srv_photo_load(idx, &src, &bytes) != ESP_OK) {
+            lv_obj_add_flag(s_grid_img[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_grid_no[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        thumb_make(src, s_grid_buf[i]);
+        free(src);
+
+        lv_image_cache_drop(&s_grid_dsc[i]);
+        memset(&s_grid_dsc[i], 0, sizeof(s_grid_dsc[i]));
+        s_grid_dsc[i].header.magic  = LV_IMAGE_HEADER_MAGIC;
+        s_grid_dsc[i].header.cf     = LV_COLOR_FORMAT_RGB565;
+        s_grid_dsc[i].header.w      = THUMB_W;
+        s_grid_dsc[i].header.h      = THUMB_H;
+        s_grid_dsc[i].header.stride = THUMB_W * 2;
+        s_grid_dsc[i].data_size     = THUMB_W * THUMB_H * 2;
+        s_grid_dsc[i].data          = s_grid_buf[i];
+        lv_image_set_src(s_grid_img[i], &s_grid_dsc[i]);
+        lv_obj_remove_flag(s_grid_img[i], LV_OBJ_FLAG_HIDDEN);
+
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", idx + 1);
+        lv_label_set_text(s_grid_no[i], buf);
+        lv_obj_remove_flag(s_grid_no[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void grid_show_page(int page)
+{
+    const int total = srv_photo_count();
+    int pages = (total + GRID_PAGE - 1) / GRID_PAGE;
+    if (pages < 1) {
+        pages = 1;
+    }
+    if (page < 0) {
+        page = 0;
+    }
+    if (page >= pages) {
+        page = pages - 1;
+    }
+
+    s_page = page;
+    s_page_count = pages;
+    grid_fill_page(page);
+
+    if (s_page_lb != NULL && lv_obj_is_valid(s_page_lb)) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "第 %d / %d 页", page + 1, pages);
+        lv_label_set_text(s_page_lb, buf);
+    }
+}
+
+static void on_grid_cell(lv_event_t *e)
+{
+    const int i = (int)(intptr_t)lv_event_get_user_data(e);
+    const int idx = s_page * GRID_PAGE + i;
+    if (idx >= 0 && idx < srv_photo_count()) {
+        open_index(idx);
+    }
+}
+
+static void on_page_prev(lv_event_t *e)
+{
+    (void)e;
+    grid_show_page(s_page - 1);
+}
+
+static void on_page_next(lv_event_t *e)
+{
+    (void)e;
+    grid_show_page(s_page + 1);
 }
 
 /* 顶部序号：滚轮选中项一变就更新 */
@@ -366,32 +497,21 @@ static char s_jump_title[48];
 static void on_jump_done(const char *text, void *arg)
 {
     (void)arg;
-    if (s_roller == NULL || !lv_obj_is_valid(s_roller) || text == NULL) {
-        return;
-    }
-    int total = srv_photo_count();
-    if (total <= 0) {
+    if (text == NULL || srv_photo_count() <= 0) {
         return;                         /* 键盘还开着时页面被切走了 */
     }
-    int n = atoi(text);
-    if (n < 1) {
-        n = 1;
-    }
-    if (n > total) {
-        n = total;
-    }
-    lv_roller_set_selected(s_roller, (uint32_t)(n - 1), LV_ANIM_OFF);
-    update_index();
+    grid_show_page(atoi(text) - 1);
 }
 
 static void on_index_clicked(lv_event_t *e)
 {
     (void)e;
-    int total = srv_photo_count();
+    const int total = srv_photo_count();
     if (total <= 0) {
         return;
     }
-    snprintf(s_jump_title, sizeof(s_jump_title), "跳到第几张（1-%d）", total);
+    const int pages = (total + GRID_PAGE - 1) / GRID_PAGE;
+    snprintf(s_jump_title, sizeof(s_jump_title), "跳到第几页（1-%d）", pages);
     ui_text_input_show(s_jump_title, 4, on_jump_done, NULL);
 }
 
@@ -399,13 +519,16 @@ static void list_build(void)
 {
     opts_free();
 
-    int total = srv_photo_count();
+    const int total = srv_photo_count();
 
-    /* 一张都没有：把滚轮和按钮藏起来，显示提示 */
+    /* 一张都没有：网格、序号、翻页全藏起来，显示提示 */
     if (total <= 0) {
-        lv_obj_add_flag(s_roller, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_index_btn, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_open_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_page_lb != NULL) {
+            lv_obj_add_flag(s_page_lb, LV_OBJ_FLAG_HIDDEN);
+        }
 
         lv_label_set_text(s_empty_lb, srv_sd_is_mounted()
                                           ? "没有照片\n把转换好的 .raw 拷进 SD 卡的 /photos"
@@ -414,62 +537,17 @@ static void list_build(void)
         return;
     }
 
-    /* 后台重扫完成时保持原来选中的那张，不要跳回第一张 */
-    const int keep = roller_sel();
-
     lv_obj_add_flag(s_empty_lb, LV_OBJ_FLAG_HIDDEN);
-
-    /* 两趟走：先量总长再分配，比"按每项预留 N 字节"准 */
-    size_t cap = 8;
-    for (int i = 0; i < total; i++) {
-        const srv_photo_t *p = NULL;
-        if (srv_photo_get(i, &p) == ESP_OK) {
-            cap += strlen(p->name) + 16;    /* 名字 + 换行 */
-        }
-    }
-
-    /* 选项文本可能上百 KB → 先试 PSRAM */
-    s_opts = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_opts == NULL) {
-        s_opts = malloc(cap);
-    }
-    if (s_opts == NULL) {
-        ESP_LOGW(TAG, "滚轮选项分配失败（%u 字节）", (unsigned)cap);
-        return;
-    }
-
-    size_t pos = 0;
-    char   short_name[SRV_PHOTO_NAME_MAX];
-    for (int i = 0; i < total; i++) {
-        const srv_photo_t *p = NULL;
-        if (srv_photo_get(i, &p) != ESP_OK) {
-            continue;
-        }
-        /* 行内只留文件名（序号已经在顶部单独显示），太长截断加省略号 */
-        utf8_shorten(short_name, sizeof(short_name), p->name, 22);
-        pos += (size_t)snprintf(s_opts + pos, cap - pos, "%s\n", short_name);
-    }
-    if (pos > 0) {
-        s_opts[pos - 1] = '\0';             /* 去掉末尾换行 */
-    }
-
-    /* 注意：不能用 lv_obj_clean(s_roller) 重建 —— 滚轮自身就是那个对象，
-     * 清子对象会把它一起弄坏。换选项走 lv_roller_set_options 即可。 */
-    lv_roller_set_options(s_roller, s_opts, LV_ROLLER_MODE_NORMAL);
-
-    int sel = keep;
-    if (sel >= total) {
-        sel = total - 1;
-    }
-    if (sel < 0) {
-        sel = 0;
-    }
-    lv_roller_set_selected(s_roller, (uint32_t)sel, LV_ANIM_OFF);
-
-    lv_obj_remove_flag(s_roller, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_roller, LV_OBJ_FLAG_HIDDEN);   /* 滚轮退役，网格接管 */
+    lv_obj_remove_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_index_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_open_btn, LV_OBJ_FLAG_HIDDEN);
-    update_index();
+    /* 「打开」按钮不显示：网格点格子直接打开 */
+    lv_obj_add_flag(s_open_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_page_lb != NULL) {
+        lv_obj_remove_flag(s_page_lb, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    grid_show_page(s_page);
 }
 
 /* ===================== 页面 ===================== */
@@ -503,10 +581,17 @@ static void photos_root_del_cb(lv_event_t *e)
     }
 
     fs_free();
+    grid_free();
     opts_free();
     pre_stop();
     s_root     = NULL;
     s_roller   = NULL;
+    s_grid     = NULL;
+    s_page_lb  = NULL;
+    for (int i = 0; i < GRID_PAGE; i++) {
+        s_grid_img[i] = NULL;
+        s_grid_no[i]  = NULL;
+    }
     s_index_btn = NULL;
     s_index_lb = NULL;
     s_empty_lb = NULL;
@@ -559,7 +644,85 @@ void ui_photos_create(lv_obj_t *root)
     lv_obj_add_event_cb(s_roller, on_roller_changed, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s_roller, on_roller_short_clicked, LV_EVENT_SHORT_CLICKED, NULL);
 
-    /* 「打开」按钮：滚轮定位到哪一张就开哪张 */
+    /* ===== 缩略图网格（滚轮隐藏，网格接管） ===== */
+    s_grid = lv_obj_create(root);
+    lv_obj_remove_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(s_grid, UI_SCREEN_W, GRID_ROWS * CELL_H + 4);
+    lv_obj_set_pos(s_grid, 0, GRID_Y);
+    lv_obj_set_style_bg_opa(s_grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_grid, 0, 0);
+    lv_obj_set_style_pad_all(s_grid, 0, 0);
+    lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+
+    for (int i = 0; i < GRID_PAGE; i++) {
+        const int col = i % GRID_COLS;
+        const int row = i / GRID_COLS;
+
+        lv_obj_t *cell = lv_button_create(s_grid);
+        lv_obj_set_size(cell, CELL_W, CELL_H);
+        lv_obj_set_pos(cell, 4 + col * (CELL_W + 4), 2 + row * (CELL_H + 4));
+        lv_obj_set_style_radius(cell, 6, 0);
+        lv_obj_set_style_bg_color(cell, UI_COLOR_SURFACE, 0);
+        lv_obj_set_style_shadow_width(cell, 0, 0);
+        lv_obj_set_style_pad_all(cell, 0, 0);
+        ui_add_click_feedback(cell);
+        lv_obj_add_event_cb(cell, on_grid_cell, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+        s_grid_img[i] = lv_image_create(cell);
+        lv_obj_center(s_grid_img[i]);
+        lv_obj_add_flag(s_grid_img[i], LV_OBJ_FLAG_HIDDEN);
+
+        s_grid_no[i] = lv_label_create(cell);
+        lv_obj_set_style_text_font(s_grid_no[i], &font_ui_14, 0);
+        lv_obj_set_style_text_color(s_grid_no[i], UI_COLOR_TEXT, 0);
+        lv_obj_set_style_bg_color(s_grid_no[i], UI_COLOR_BG, 0);
+        lv_obj_set_style_bg_opa(s_grid_no[i], LV_OPA_60, 0);
+        lv_obj_set_style_pad_hor(s_grid_no[i], 3, 0);
+        lv_obj_set_style_radius(s_grid_no[i], 3, 0);
+        lv_obj_align(s_grid_no[i], LV_ALIGN_BOTTOM_RIGHT, -2, -2);
+        lv_label_set_text(s_grid_no[i], "");
+        lv_obj_add_flag(s_grid_no[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* 底部翻页栏：上一页 / 页码 / 下一页 */
+    lv_obj_t *prev = lv_button_create(root);
+    lv_obj_set_size(prev, 56, 24);
+    lv_obj_align(prev, LV_ALIGN_BOTTOM_LEFT, 12, -8);
+    lv_obj_set_style_radius(prev, 6, 0);
+    lv_obj_set_style_bg_color(prev, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(prev, 0, 0);
+    lv_obj_set_style_pad_all(prev, 0, 0);
+    ui_add_click_feedback(prev);
+    lv_obj_add_event_cb(prev, on_page_prev, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *prev_lb = lv_label_create(prev);
+    lv_obj_set_style_text_font(prev_lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(prev_lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(prev_lb, "上一页");
+    lv_obj_center(prev_lb);
+
+    lv_obj_t *next = lv_button_create(root);
+    lv_obj_set_size(next, 56, 24);
+    lv_obj_align(next, LV_ALIGN_BOTTOM_RIGHT, -12, -8);
+    lv_obj_set_style_radius(next, 6, 0);
+    lv_obj_set_style_bg_color(next, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(next, 0, 0);
+    lv_obj_set_style_pad_all(next, 0, 0);
+    ui_add_click_feedback(next);
+    lv_obj_add_event_cb(next, on_page_next, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *next_lb = lv_label_create(next);
+    lv_obj_set_style_text_font(next_lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(next_lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(next_lb, "下一页");
+    lv_obj_center(next_lb);
+
+    s_page_lb = lv_label_create(root);
+    lv_obj_set_style_text_font(s_page_lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(s_page_lb, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_align(s_page_lb, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_label_set_text(s_page_lb, "第 1 / 1 页");
+    lv_obj_add_flag(s_page_lb, LV_OBJ_FLAG_HIDDEN);
+
+    /* 「打开」按钮：网格直接点格子打开，这个按钮保留但隐藏（兼容老逻辑） */
     s_open_btn = lv_button_create(root);
     lv_obj_set_size(s_open_btn, BTN_W, BTN_H);
     lv_obj_align(s_open_btn, LV_ALIGN_BOTTOM_MID, 0, -8);

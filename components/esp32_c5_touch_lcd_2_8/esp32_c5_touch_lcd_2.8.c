@@ -553,11 +553,33 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
     const esp_lcd_panel_io_spi_config_t io_config = {
         .dc_gpio_num = BSP_LCD_DC,
         .cs_gpio_num = BSP_LCD_CS,
-        .pclk_hz = 80 * 1000 * 1000,
+        /* pclk_hz 统一引用 display.h 的 BSP_LCD_PIXEL_CLOCK_HZ。
+         * 原来是硬编码的 80 * 1000 * 1000，与头文件声明的 20 MHz 不一致，
+         * 且远超 ST7789 串行写周期规格（≈15 MHz），又压着 psram_dma_direct 的
+         * "has speed limit" 通路 —— 是「刷新时随机出现红色线条 / 像素或整行错位」的
+         * 高速串行数据错位来源。现降到 40 MHz（2 倍余量），
+         * 若仍有残留只需改这个宏往下调，不必动驱动。 */
+        .pclk_hz = BSP_LCD_PIXEL_CLOCK_HZ,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
         .trans_queue_depth = 10,
+        /* 必须开 psram_dma_direct，否则每笔 SPI 事务都要在内部 RAM 里临时 malloc
+         * 一块 4KB（DMA_DESCRIPTOR_BUFFER_MAX_SIZE_4B_ALIGNED=4092）的 bounce 缓冲：
+         * LVGL 的 color buffer 在 PSRAM（.use_psram=true），而 psram_dma_direct 未开时
+         * spi_common.c 会走 need_malloc 分支，按 MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL 申请。
+         * 一次 flush 是 320x50x2=32000 B，被切成 ceil(32000/4092)=8 笔，
+         * 瞬时向内部 DMA 池索要 8x4092≈32KB；而内部可用池只有
+         * SPIRAM_MALLOC_RESERVE_INTERNAL=32768 那一档，按构造就是临界，
+         * 任何并发/碎片都会让某一笔拿不到 → "Failed to allocate priv TX buffer"
+         * → 整块 flush 放弃 → 屏幕停在上一帧 → 撕裂。
+         * 打开该 flag 后 esp_memory_utils.c 的 esp_ptr_dma_ext_capable 判定 PSRAM 可直接 DMA
+         * （C5: SOC_PSRAM_DMA_CAPABLE=1），need_malloc 直接为 false，内部 DMA 需求归零。
+         * 代价：PSRAM 直读 DMA 有速度上限、每笔多一次 cache msync（官方注释：has speed limit,
+         * but no temp buffer and save memory）。 */
+        .flags = {
+            .psram_dma_direct = 1,
+        },
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM, &io_config, &io_handle));
 

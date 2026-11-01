@@ -55,6 +55,11 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_VOLUME,          volume,           60,     0, 100),
     I32(CFG_DIM_EN,          dim_en,           CFG_DEF_DIM_EN,       0, 1),
     I32(CFG_DIM_AFTER,       dim_after,        CFG_DEF_DIM_AFTER,   10, 600),
+    I32(CFG_LOCK_EN,         lock_en,          CFG_DEF_LOCK_EN,      0, 1),
+    /* 锁屏比变暗晚一档：界面上的步进是 30 秒一格（30~3600 秒） */
+    I32(CFG_LOCK_AFTER,      lock_after,       CFG_DEF_LOCK_AFTER,  30, 3600),
+    /* 触摸唤醒：关掉后休眠中的点击不再亮屏，只能用 BOOT 键唤醒 */
+    I32(CFG_TOUCH_WAKE,      touch_wake,       CFG_DEF_TOUCH_WAKE,   0, 1),
     I32(CFG_FAST_HOME,       fast_home,        CFG_DEF_FAST_HOME,    0, 1),
     /* 电池修正系数：0.5~2.0 倍，单点校准算出来落在这个区间里 */
     I32(CFG_BAT_CAL_K,       bat_cal_k,        CFG_DEF_BAT_CAL_K,    500, 2000),
@@ -89,6 +94,8 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_READ_PARA_SP,    read_para_space,  0,      0, 40),
     /* 阅读器里默认允许自动变暗，想安安静静看书可以关掉 */
     I32(CFG_READ_KEEP_BRIGHT, read_keep_bright, 0,     0, 1),
+    /* 书架按最近阅读排序：越后读的越靠前 */
+    I32(CFG_SHELF_RECENT,    shelf_recent,      CFG_DEF_SHELF_RECENT, 0, 1),
 
     /* 传感器 */
     I32(CFG_TEMP_REC_EN,     temp_rec_en,      1,      0, 1),

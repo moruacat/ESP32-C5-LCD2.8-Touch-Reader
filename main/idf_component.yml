@@ -1,7 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
   lvgl/lvgl:
-    version: "9.3.0"
+    version: "9.5.0"
     public: true
   espressif/esp_lvgl_adapter: "^0.4.0"
   espressif/esp_audio_codec: "^2.5.0"

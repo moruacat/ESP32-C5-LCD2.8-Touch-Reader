@@ -43,6 +43,9 @@ OUT_DIR = os.path.join(ROOT, "main", "assets", "fonts")
 
 # 英语词典里常见的 IPA 符号（含重音、长短音、元音、辅音）
 IPA_EXTRA = "ˈˌːˑ͜͡əɚɜɝɐɪʊʏɛœʌɔɒɑæɨʉʃʒʧʤθðçɡŋɲɹɾʔʰʲʷⁿ"
+# 中文词条（CC-CEDICT）的拼音要带声调符号：这些字形 Arial 有，IPA 字符集里原本没有，
+# 不补的话查中文词时音标位置会出一排空心方框
+PINYIN_EXTRA = "āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜü"
 
 # 目标字体：key -> (输出名, 字号, bpp, 字体文件, 字符集种类)
 # 时钟那个 48px 字体只有数字和冒号，字符集固定，不用重新生成
@@ -60,7 +63,9 @@ def collect_chars(kind):
     if kind == "ipa":
         chars = {chr(c) for c in range(0x20, 0x7F)}   # ASCII 可打印
         chars.update(IPA_EXTRA)                       # 音标本身的符号
-        print("  音标字符集：ASCII + %d 个 IPA 符号" % len(IPA_EXTRA))
+        chars.update(PINYIN_EXTRA)                    # 中文词条的拼音声调
+        print("  音标字符集：ASCII + %d 个 IPA 符号 + %d 个拼音声调符号"
+              % (len(IPA_EXTRA), len(set(PINYIN_EXTRA))))
         return sorted(chars)
 
     chars = set()
@@ -87,15 +92,42 @@ def write_hex(chars, kind):
     return hex_path
 
 
-def build(name, size, bpp, ttf, hex_path):
+def find_lvc():
+    """定位 lv_font_conv 的调用前缀（返回 [可执行, ...参数] 或 None）
+
+    优先用 `%APPDATA%\\npm\\node_modules` 下已装好的包直接跑：`npx --no-install`
+    依赖当前 node 的全局前缀，换一个 node（比如沙箱自带的）就找不到包了。
+    """
+    env = os.environ.get("LV_FONT_CONV")
+    if env:
+        return [env]
+    node = shutil.which("node") or shutil.which("node.exe")
+    for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
+        if not base or node is None:
+            continue
+        js = os.path.join(base, "npm", "node_modules", "lv_font_conv", "lv_font_conv.js")
+        if os.path.exists(js):
+            return [node, js]
     npx = shutil.which("npx") or shutil.which("npx.cmd")
-    if npx is None:
-        print("找不到 npx，请先装 Node.js")
+    if npx is not None:
+        return [npx, "--no-install", "lv_font_conv"]
+    if node is not None:
+        js = os.path.join(os.path.dirname(node), "node_modules", "lv_font_conv",
+                          "lv_font_conv.js")
+        if os.path.exists(js):
+            return [node, js]
+    return None
+
+
+def build(name, size, bpp, ttf, hex_path):
+    lvc = find_lvc()
+    if lvc is None:
+        print("找不到 lv_font_conv（装 Node.js + npm i -g lv_font_conv，"
+              "或用 LV_FONT_CONV 指向 lv_font_conv.js）")
         return False
 
     out_c = os.path.join(OUT_DIR, name + ".c")
-    cmd = [
-        npx, "--no-install", "lv_font_conv",
+    cmd = lvc + [
         "--font", ttf,
         "--format", "lvgl",
         "--size", str(size),

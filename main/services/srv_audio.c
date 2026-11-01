@@ -191,10 +191,22 @@ esp_err_t srv_audio_pcm_open(int sample_rate, int channels, int bits)
 
 int srv_audio_pcm_write(const void *data, int bytes)
 {
-    if (!s_pcm_open || s_spk == NULL || data == NULL || bytes <= 0) {
+    /* 必须持锁：电台拆成了取流（生产者）/写 I2S（消费者）两个任务，
+     * 生产者可能在消费者正写着的时候调用 srv_audio_pcm_close()，
+     * 不锁的话 esp_codec_dev_write 会打在已经关掉的设备上。
+     * 阻塞的写过程持锁没关系：close 前会先把 primed 清掉让消费者收手。 */
+    if (s_spk == NULL || data == NULL || bytes <= 0) {
         return -1;
     }
-    return esp_codec_dev_write(s_spk, (void *)data, bytes);
+
+    dev_lock();
+    int ret = -1;
+    if (s_pcm_open) {
+        ret = esp_codec_dev_write(s_spk, (void *)data, bytes);
+    }
+    dev_unlock();
+
+    return ret;
 }
 
 void srv_audio_pcm_close(void)

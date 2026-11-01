@@ -22,12 +22,18 @@
 
 static const char *TAG = "srv_player";
 
-#define IN_BUF_BYTES        8192
-#define PCM_BUF_BYTES       8192
+/* 输入缓冲加大到 64KB：SD 与 LCD 共用 SPI2，LVGL 刷屏时 fread 会被总线锁住；
+ * 原来 8KB 只够约 20ms 音频，一被阻塞就断音。64KB 一次读得多、被阻塞的次数少。
+ * PCM 缓冲同步加大，减少 I2S 写入次数。两块都在 PSRAM（big_malloc）。 */
+#define IN_BUF_BYTES        65536
+#define PCM_BUF_BYTES       32768
+/* 整首预读上限：SD 与 LCD 共用 SPI2，只要播放期间还在读卡就一定有细微卡顿。
+ * 小文件整首读进 PSRAM 后，播放阶段零 SD 访问；超过上限的回退流式。 */
+#define PRELOAD_MAX         (4 * 1024 * 1024)
 #define PCM_BUF_MAX         (64 * 1024)
 #define CMD_Q_LEN           8
 #define PLAYER_TASK_STACK   6144
-#define PLAYER_TASK_PRIO    5
+#define PLAYER_TASK_PRIO    6
 #define SAVE_MIN_INTERVAL_US (5 * 1000 * 1000)
 #define EMPTY_BLOCK_GUARD   32      /* 连续无输出时的保护次数 */
 
@@ -56,6 +62,10 @@ typedef struct {
     int                           in_len;
     int                           in_used;
     bool                          eos;
+    /* 整首预读：非空时 track_fill 从这块 PSRAM 取数据，fp 已经关闭 */
+    uint8_t                      *preload;
+    uint32_t                      preload_size;
+    uint32_t                      preload_pos;
     uint8_t                      *pcm_buf;
     int                           pcm_cap;
     int                           sample_rate;
@@ -389,7 +399,25 @@ static uint32_t mp3_probe(FILE *fp, uint32_t file_size, int32_t *out_dur_ms)
 
 static bool track_fill(track_t *t)
 {
+    /* 预读模式：直接从 PSRAM 拷贝，播放期间不再读 SD */
+    if (t->preload != NULL) {
+        uint32_t remain = t->preload_size - t->preload_pos;
+        int n = (remain < (uint32_t)IN_BUF_BYTES) ? (int)remain : IN_BUF_BYTES;
+        memcpy(t->in_buf, t->preload + t->preload_pos, (size_t)n);
+        t->preload_pos += (uint32_t)n;
+        t->in_len  = n;
+        t->in_used = 0;
+        t->eos     = (n < IN_BUF_BYTES);
+        return n > 0;
+    }
+
+    const int64_t t0 = esp_timer_get_time();
     t->in_len = (int)fread(t->in_buf, 1, IN_BUF_BYTES, t->fp);
+    const int64_t dt_ms = (esp_timer_get_time() - t0) / 1000;
+    /* 每次读卡的耗时：超过 50ms 说明被 SPI 总线/LVGL 刷屏卡住了，会直接体现在这里 */
+    if (dt_ms > 50) {
+        ESP_LOGW(TAG, "读卡 %d ms（%d 字节）", (int)dt_ms, t->in_len);
+    }
     t->in_used = 0;
     t->eos = (t->in_len < IN_BUF_BYTES);
     return t->in_len > 0;
@@ -509,6 +537,8 @@ static void track_seek(track_t *t, int32_t ms)
 
     uint32_t data_bytes = t->file_size - t->data_off;
 
+    uint32_t target;
+
     if (t->fmt == SRV_MUSIC_FMT_WAV) {
         /* WAV 是裸 PCM，按采样数精确落位 */
         int frame = t->channels * (t->bits / 8);
@@ -519,7 +549,7 @@ static void track_seek(track_t *t, int32_t ms)
         if (byte_off > data_bytes) {
             byte_off = data_bytes;
         }
-        fseek(t->fp, (long)(t->data_off + byte_off), SEEK_SET);
+        target = t->data_off + byte_off;
     } else {
         if (s_dur_ms <= 0) {
             return;
@@ -528,11 +558,18 @@ static void track_seek(track_t *t, int32_t ms)
         if (byte_off > data_bytes) {
             byte_off = data_bytes;
         }
-        uint32_t base = t->data_off + byte_off;
+        target = t->data_off + byte_off;
+    }
+
+    if (t->preload != NULL) {
+        /* 预读模式：直接改读取位置。没法在内存里做 MP3 帧同步，
+         * 误差最多一帧（<26ms），听感上察觉不到 */
+        t->preload_pos = target;
+    } else {
         if (t->fmt == SRV_MUSIC_FMT_MP3) {
-            base = mp3_find_sync(t->fp, base, t->data_off + data_bytes);
+            target = mp3_find_sync(t->fp, target, t->data_off + data_bytes);
         }
-        fseek(t->fp, (long)base, SEEK_SET);
+        fseek(t->fp, (long)target, SEEK_SET);
     }
 
     esp_audio_simple_dec_reset(t->dec);
@@ -632,6 +669,9 @@ static void track_close(track_t *t)
     if (t->fp != NULL) {
         fclose(t->fp);
     }
+    if (t->preload != NULL) {
+        free(t->preload);
+    }
     free(t->in_buf);
     free(t->pcm_buf);
     free(t);
@@ -706,6 +746,35 @@ static track_t *track_open(const srv_music_t *m)
         ESP_LOGE(TAG, "无法解析音频信息: %s", m->path);
         track_close(t);
         return NULL;
+    }
+
+    /*
+     * 整首预读：SD 与 LCD 共用 SPI2，流式播放时每次 fread 都可能被刷屏阻塞，
+     * 缓冲再大也只是减少次数。≤4MB 的曲子整份读进 PSRAM，播放阶段零 SD 访问，
+     * 从根上消掉这类细微卡顿；更大的曲子仍按流式。
+     */
+    if (t->file_size > t->data_off && t->file_size <= PRELOAD_MAX) {
+        uint8_t *buf = big_malloc(t->file_size);
+        if (buf != NULL) {
+            fseek(t->fp, 0, SEEK_SET);
+            if (fread(buf, 1, t->file_size, t->fp) == t->file_size) {
+                t->preload      = buf;
+                t->preload_size = t->file_size;
+                t->preload_pos  = t->data_off;      /* 跳过 ID3 / WAV 头 */
+                fclose(t->fp);
+                t->fp      = NULL;
+                t->in_len  = 0;
+                t->in_used = 0;
+                t->eos     = false;
+                ESP_LOGI(TAG, "整首预读：%u KB（播放期间不再读卡）",
+                         (unsigned)(t->file_size / 1024));
+            } else {
+                free(buf);
+                fseek(t->fp, (long)t->data_off, SEEK_SET);
+            }
+        } else {
+            ESP_LOGW(TAG, "PSRAM 不足，%s 仍按流式播放", m->path);
+        }
     }
 
     if (srv_audio_pcm_open(t->sample_rate, t->channels, t->bits) != ESP_OK) {

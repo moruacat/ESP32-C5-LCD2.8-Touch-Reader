@@ -4,6 +4,8 @@
 #include "ui_dialog.h"
 #include "app_navigator.h"
 #include "srv_library.h"
+#include "srv_recent.h"
+#include "ui_ime.h"
 #include "srv_reader.h"
 
 #include "esp_log.h"
@@ -67,6 +69,9 @@ static void on_book(lv_event_t *e)
     }
 
     app_navigator_switch(PAGE_READER, true);
+
+    /* 记录最近阅读（排序文件在 /books/.recent） */
+    srv_recent_touch(bk->path);
 }
 
 /* ===================== 长按菜单 ===================== */
@@ -262,11 +267,11 @@ static void add_card(lv_obj_t *list, const srv_book_t *bk, int idx)
 
     /* 两行也放不下的长书名改成循环滚动，否则后半截永远看不到。
      * 判断用「单行渲染宽度 > 两行可用宽度」，比按字数估准。
-     * 注意用 v9 的 lv_text_get_width：v8 那个 lv_txt_get_width 名字虽然
-     * 还能编过（兼容层做了映射），但它多一个 flag 参数，v9 里已经没有了。 */
-    uint32_t len = (uint32_t)strlen(bk->name);
-    lv_coord_t w1 = lv_text_get_width(bk->name, len, &font_ui_14, 0);
-    if (w1 <= inner_w * 2) {
+     * 量宽只能走 lv_text_get_size：lv_text_get_width 在 v9 里是 private 的
+     * （声明挪进了 lv_text_private.h），公开头里只有 get_size 这一个入口。 */
+    lv_point_t sz = { 0, 0 };
+    lv_text_get_size(&sz, bk->name, &font_ui_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if (sz.x <= inner_w * 2) {
         lv_label_set_long_mode(name, LV_LABEL_LONG_WRAP);
     } else {
         lv_obj_set_height(name, 18);
@@ -279,27 +284,69 @@ static void add_card(lv_obj_t *list, const srv_book_t *bk, int idx)
 /* ===================== 页面 ===================== */
 
 /* 列表内容（空态或卡片）。抽出来是为了移出书架后能整块重建 */
+static char s_filter[SRV_BOOK_NAME_MAX];
+
+/* 书名子串匹配，ASCII 大小写不敏感（中文按字节直接比） */
+static bool name_match(const char *name, const char *kw)
+{
+    if (kw[0] == '\0') {
+        return true;
+    }
+    const size_t ln = strlen(name);
+    const size_t lk = strlen(kw);
+    for (size_t i = 0; i + lk <= ln; i++) {
+        size_t j = 0;
+        for (; j < lk; j++) {
+            char a = name[i + j];
+            char b = kw[j];
+            if (a >= 'A' && a <= 'Z') {
+                a = (char)(a + 32);
+            }
+            if (b >= 'A' && b <= 'Z') {
+                b = (char)(b + 32);
+            }
+            if (a != b) {
+                break;
+            }
+        }
+        if (j == lk) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void shelf_fill(lv_obj_t *list)
 {
-    int n = srv_library_count();
+    const int n = srv_library_count();
+    int shown = 0;
 
-    if (n <= 0) {
+    for (int i = 0; i < n; i++) {
+        const srv_book_t *bk = NULL;
+        if (srv_library_get(i, &bk) != ESP_OK || bk == NULL) {
+            continue;
+        }
+        if (!name_match(bk->name, s_filter)) {
+            continue;
+        }
+        add_card(list, bk, i);
+        shown++;
+    }
+
+    if (shown == 0) {
         lv_obj_t *empty = lv_label_create(list);
         lv_obj_set_style_text_color(empty, UI_COLOR_TEXT_DIM, 0);
         lv_obj_set_style_text_font(empty, &font_ui_14, 0);
-        lv_label_set_text(empty, "书架是空的\n把 txt 或 EBF 文件夹放进 /books/");
+        if (n <= 0) {
+            lv_label_set_text(empty, "书架是空的\n把 txt 或 EBF 文件夹放进 /books/");
+        } else {
+            lv_label_set_text(empty, "没有找到匹配的书");
+        }
         lv_obj_align(empty, LV_ALIGN_CENTER, 0, 0);
         return;
     }
 
-    for (int i = 0; i < n; i++) {
-        const srv_book_t *bk = NULL;
-        if (srv_library_get(i, &bk) == ESP_OK && bk != NULL) {
-            add_card(list, bk, i);
-        }
-    }
-
-    ESP_LOGI(TAG, "书架列出 %d 本", n);
+    ESP_LOGI(TAG, "书架列出 %d / %d 本", shown, n);
 }
 
 static void shelf_list_del_cb(lv_event_t *e)
@@ -324,14 +371,43 @@ static void shelf_rebuild(void)
     shelf_fill(s_list);
 }
 
+static void on_search_done(const char *text, void *arg)
+{
+    (void)arg;
+    /* 输入空串 = 清除过滤 */
+    snprintf(s_filter, sizeof(s_filter), "%s", (text != NULL) ? text : "");
+    shelf_rebuild();
+    ESP_LOGI(TAG, "书架搜索：%s", s_filter);
+}
+
+static void on_search_clicked(lv_event_t *e)
+{
+    (void)e;
+    ui_ime_text_input_show("搜索书名", SRV_BOOK_NAME_MAX - 1, on_search_done, NULL);
+}
+
 void ui_bookshelf_create(lv_obj_t *root)
 {
-    ui_titlebar_create(root, "书架", app_navigator_back_smart_cb, NULL);
+    ui_titlebar_create_plain(root, "书架", app_navigator_back_smart_cb, NULL);
 
-    /* 第一次进来书架可能是空的，自动扫一遍 */
-    if (srv_library_count() <= 0) {
-        srv_library_scan();
-    }
+    /* 每次进书架都重扫：最近阅读排序开关可能刚改过 */
+    (void)srv_library_scan();
+
+    /* 右上角搜索按钮（plain 标题栏右侧不显示时间，位置不会被挤） */
+    lv_obj_t *search = lv_button_create(root);
+    lv_obj_set_size(search, 56, 24);
+    lv_obj_set_pos(search, UI_SCREEN_W - 62, 4);
+    lv_obj_set_style_radius(search, 6, 0);
+    lv_obj_set_style_bg_color(search, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(search, 0, 0);
+    lv_obj_set_style_pad_all(search, 0, 0);
+    ui_add_click_feedback(search);
+    lv_obj_add_event_cb(search, on_search_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *search_lb = lv_label_create(search);
+    lv_obj_set_style_text_font(search_lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(search_lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(search_lb, "搜索");
+    lv_obj_center(search_lb);
 
     /* 列表容器：书架比一屏长，要能纵向滚 */
     lv_obj_t *list = lv_obj_create(root);

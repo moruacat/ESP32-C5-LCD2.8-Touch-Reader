@@ -1,7 +1,9 @@
 #include "ui_alarm_alert.h"
 
-#include "ui_dialog.h"
 #include "ui_common.h"
+#include "ui_icons.h"
+#include "ui_dialog.h"
+#include "ui_sleep.h"
 #include "srv_alarm.h"
 #include "srv_config.h"
 
@@ -19,49 +21,117 @@ static const char *const ALARM_TITLE[SRV_CONFIG_ALARM_NUM] = {"闹钟 1", "闹�
 static const char *const K_H[SRV_CONFIG_ALARM_NUM]         = {"alarm1_h", "alarm2_h", "alarm3_h"};
 static const char *const K_M[SRV_CONFIG_ALARM_NUM]         = {"alarm1_m", "alarm2_m", "alarm3_m"};
 
-static int          s_ringing_idx;      /*!< 正在响的闹钟 1..3，0 = 无 */
-static lv_timer_t  *s_watch_timer;      /*!< 1Hz 盯着响铃结束，顺便补弹提示层 */
+#define BTN_W       116
+#define BTN_H       44
 
-/* ===================== 提示层 ===================== */
+static lv_obj_t   *s_layer;         /*!< 全屏提醒层（挂 lv_layer_top，不随页面销毁） */
+static lv_timer_t *s_watch;         /*!< 1Hz 盯着响铃结束 */
+static int         s_idx;           /*!< 正在响的闹钟 1..3，0 = 无 */
 
-static void stop_btn_cb(void *arg)
+/* ===================== 全屏层 ===================== */
+
+static void layer_destroy(void)
 {
-    srv_alarm_stop((int)(intptr_t)arg);
+    if (s_layer != NULL && lv_obj_is_valid(s_layer)) {
+        lv_obj_delete(s_layer);
+    }
+    s_layer = NULL;
 }
 
-static void show_ring_alert(int index)
+static void on_stop(lv_event_t *e)
 {
-    char note[16];
+    (void)e;
+    srv_alarm_stop(s_idx);
+    layer_destroy();
+}
 
+static void on_snooze(lv_event_t *e)
+{
+    (void)e;
+    srv_alarm_snooze(s_idx, 5);
+    layer_destroy();
+}
+
+/* 底部一个按钮：返回按钮对象 */
+static lv_obj_t *make_btn(lv_obj_t *parent, lv_coord_t x, const char *text,
+                          lv_color_t color, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_size(btn, BTN_W, BTN_H);
+    lv_obj_set_pos(btn, x, UI_SCREEN_H - BTN_H - 14);
+    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_set_style_bg_color(btn, color, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    ui_add_click_feedback(btn);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *lb = lv_label_create(btn);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(lb, text);
+    lv_obj_center(lb);
+    return btn;
+}
+
+static void show_ring_layer(int index)
+{
+    layer_destroy();
+
+    s_layer = lv_obj_create(lv_layer_top());
+    lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_layer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(s_layer, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_pos(s_layer, 0, 0);
+    lv_obj_set_style_bg_color(s_layer, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(s_layer, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_layer, 0, 0);
+    lv_obj_set_style_radius(s_layer, 0, 0);
+    lv_obj_set_style_pad_all(s_layer, 0, 0);
+
+    /* 标题 */
+    lv_obj_t *ttl = lv_label_create(s_layer);
+    lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
+    lv_obj_set_style_text_color(ttl, UI_COLOR_PRIMARY, 0);
+    lv_label_set_text(ttl, ALARM_TITLE[index - 1]);
+    lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 18);
+
+    /* 设置的时间，大号数字 */
+    char note[16];
     snprintf(note, sizeof(note), "%02d:%02d",
              (int)srv_config_get_int(K_H[index - 1], 0),
              (int)srv_config_get_int(K_M[index - 1], 0));
+    lv_obj_t *time_lb = lv_label_create(s_layer);
+    lv_obj_set_style_text_font(time_lb, &font_clock_48, 0);
+    lv_obj_set_style_text_color(time_lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(time_lb, note);
+    lv_obj_align(time_lb, LV_ALIGN_CENTER, 0, -24);
 
-    /* 不自动关：60 秒后 srv_alarm 自己会停，下面的 watch 定时器再把提示收掉 */
-    ui_alert_show(ALARM_TITLE[index - 1], UI_COLOR_TEMP, note,
-                  "停止", stop_btn_cb, (void *)(intptr_t)index, 0);
+    lv_obj_t *hint = lv_label_create(s_layer);
+    lv_obj_set_style_text_font(hint, &font_ui_14, 0);
+    lv_obj_set_style_text_color(hint, UI_COLOR_TEXT_DIM, 0);
+    lv_label_set_text(hint, "稍后 5 分钟，或停止（BOOT 键同停止）");
+    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 30);
+
+    /* 两个按钮：左稍后，右停止 */
+    const lv_coord_t gap = 16;
+    const lv_coord_t x0 = (UI_SCREEN_W - BTN_W * 2 - gap) / 2;
+    make_btn(s_layer, x0, "稍后 5 分钟", UI_COLOR_SURFACE, on_snooze);
+    make_btn(s_layer, x0 + BTN_W + gap, "停止", UI_COLOR_PRIMARY, on_stop);
 }
 
-/**
- * @brief 响铃期间每秒检查一次
- *
- * 两件事：铃停了就收掉提示层；提示层被切页带走（它挂在屏幕上，换页会跟着销毁）
- * 而铃还在响，就补弹一次 —— 只在这种情况下重建，不会每秒闪一次。
- */
-static void watch_timer_cb(lv_timer_t *timer)
+/* 1Hz：铃停了就收掉全屏层；层被意外删掉（比如切页后重建）而铃还在响，就补弹 */
+static void watch_cb(lv_timer_t *t)
 {
-    int idx = s_ringing_idx;
-
-    if (idx == 0 || !srv_alarm_is_ringing(idx)) {
-        ui_alert_close();
-        s_ringing_idx = 0;
-        s_watch_timer = NULL;
-        lv_timer_delete(timer);
+    if (s_idx == 0 || !srv_alarm_is_ringing(s_idx)) {
+        layer_destroy();
+        s_idx = 0;
+        s_watch = NULL;
+        lv_timer_delete(t);
         return;
     }
-
-    if (!ui_alert_visible()) {
-        show_ring_alert(idx);
+    if (s_layer == NULL || !lv_obj_is_valid(s_layer)) {
+        show_ring_layer(s_idx);
     }
 }
 
@@ -71,17 +141,21 @@ static void alarm_ui_task(void *arg)
 {
     int index = (int)(intptr_t)arg;
 
+    /* 先把屏幕点亮：闹钟响时手机一定是亮屏的。ui_sleep_set 自己会取 LVGL 锁，
+     * 这里必须在取锁之前调用，避免同线程重复取锁 */
+    ui_sleep_set(false);
+
     if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) != ESP_OK) {
         ESP_LOGW(TAG, "取 LVGL 锁失败，跳过闹钟提示");
         vTaskDelete(NULL);
         return;
     }
 
-    s_ringing_idx = index;
-    show_ring_alert(index);
+    s_idx = index;
+    show_ring_layer(index);
 
-    if (s_watch_timer == NULL) {
-        s_watch_timer = lv_timer_create(watch_timer_cb, 1000, NULL);
+    if (s_watch == NULL) {
+        s_watch = lv_timer_create(watch_cb, 1000, NULL);
     }
 
     bsp_display_unlock();
@@ -93,7 +167,7 @@ static void on_alarm_ring(int index, void *arg)
 {
     (void)arg;
 
-    ESP_LOGW(TAG, "闹钟 %d 响铃，弹出停止提示", index);
+    ESP_LOGW(TAG, "闹钟 %d 响铃，弹出全屏提醒", index);
 
     if (xTaskCreate(alarm_ui_task, "alarm_ui", 4096,
                     (void *)(intptr_t)(index + 1), 5, NULL) != pdPASS) {
@@ -109,5 +183,5 @@ void ui_alarm_alert_init(void)
 
     /* BOOT 键不在这里注册：它是单回调槽，统一交给 ui_sleep 处理
      * （那边会先判响铃、再决定要不要休眠）。 */
-    ESP_LOGI(TAG, "闹钟提示就绪（点屏幕上的「停止」或按 BOOT 键）");
+    ESP_LOGI(TAG, "闹钟提示就绪（全屏：稍后 5 分钟 / 停止，BOOT 键同停止）");
 }

@@ -351,7 +351,12 @@ static void on_del_ok(void *arg)
 
 static void act_delete(const char *path, const char *name, bool is_dir)
 {
-    char note[SRV_FS_NAME_MAX + 32];
+    /* ★ 前缀「文件夹连同里面的内容一起删除：」是 45 字节，加上文件名的 255 字节
+     *   上限就是 300 字节，原先的 288（SRV_FS_NAME_MAX + 32）装不下：-O2 下
+     *   GCC 的 -Wformat-truncation
+     *   能算出来，而 IDF 开着 -Werror，于是直接变成编译错误。留到 +64 有富余，
+     *   以后再改文案也不用重算。 */
+    char note[SRV_FS_NAME_MAX + 64];
     snprintf(note, sizeof(note), "%s%s",
              is_dir ? "文件夹连同里面的内容一起删除：" : "", name);
 

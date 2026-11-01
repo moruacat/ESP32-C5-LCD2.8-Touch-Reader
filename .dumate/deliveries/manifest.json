@@ -1,0 +1,14 @@
+[
+  {
+    "time": 1793444972352,
+    "session": "ses_gffe5e6f20b5ebffea6W7h8iBLrmnI2",
+    "filename": "README.txt",
+    "delivered": "D:\\#MORUA\\danpianji\\ESP32-C5-LCD2.8-Touch-Reader\\sdcard\\README.txt"
+  },
+  {
+    "time": 1793448273935,
+    "session": "ses_gffe5e6f20b5ebffea6W7h8iBLrmnI2",
+    "filename": "CMakeLists.txt",
+    "delivered": "D:\\#MORUA\\danpianji\\ESP32-C5-LCD2.8-Touch-Reader\\main\\CMakeLists.txt"
+  }
+]

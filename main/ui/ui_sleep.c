@@ -5,6 +5,9 @@
 #include "srv_alarm.h"
 #include "srv_config.h"
 #include "srv_input.h"
+#include "srv_player.h"
+#include "srv_radio.h"
+#include "srv_recorder.h"
 
 #include "bsp/esp32_c5_touch_lcd_2.8.h"
 #include "esp_log.h"
@@ -23,6 +26,7 @@ static bool      s_on    = false;
 
 static int64_t   s_last_act_us = 0;
 static bool      s_dimmed      = false;
+static bool      s_locked      = false;     /*!< 本次闲置是否已经锁过屏 */
 
 bool ui_sleep_is_on(void)
 {
@@ -44,6 +48,71 @@ static int64_t dim_after_us(void)
         sec = 10;
     }
     return (int64_t)sec * 1000000;
+}
+
+/* ===================== 自动锁屏 ===================== */
+
+static bool lock_enabled(void)
+{
+    return srv_config_get_int(CFG_LOCK_EN, CFG_DEF_LOCK_EN) != 0;
+}
+
+/* 配置里存的是秒；下限夹到 30 秒，免得设得太小动不动就跳回主页 */
+static int64_t lock_after_us(void)
+{
+    int sec = (int)srv_config_get_int(CFG_LOCK_AFTER, CFG_DEF_LOCK_AFTER);
+    if (sec < 30) {
+        sec = 30;
+    }
+    return (int64_t)sec * 1000000;
+}
+
+/**
+ * @brief 这些情况算「正在用」，闲置超时不该把用户踢回主页
+ *
+ * 在播的电台/音乐切页只是把界面藏起来、声音照放，但用户正看着播放控制；
+ * 录音切页等于把录音界面丢了；闹钟响着更不能黑屏。
+ */
+static bool keep_awake(void)
+{
+    app_page_id_t cur = app_navigator_current();
+
+    if (cur == PAGE_READER && srv_config_get_int(CFG_READ_KEEP_BRIGHT, 0) != 0) {
+        return true;                        /* 阅读器开了「不暗屏」：别锁 */
+    }
+
+    if (cur == PAGE_RADIO) {
+        srv_radio_state_t rs = srv_radio_state();
+        if (rs == SRV_RADIO_PLAYING || rs == SRV_RADIO_BUFFERING) {
+            return true;
+        }
+    }
+    if (cur == PAGE_MUSIC && srv_player_state() == SRV_PLAYER_PLAYING) {
+        return true;
+    }
+    if (cur == PAGE_RECORDER && srv_recorder_is_active()) {
+        return true;
+    }
+
+    for (int i = 1; i <= SRV_CONFIG_ALARM_NUM; i++) {
+        if (srv_alarm_is_ringing(i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* 锁屏：清栈回时钟页 + 关屏。跑在 LVGL 定时器里，锁是递归的，重复加没问题 */
+static void lock_screen(void)
+{
+    ESP_LOGI(TAG, "闲置 %d 秒，自动锁屏（回时钟页并关屏）",
+             (int)(lock_after_us() / 1000000));
+
+    s_locked = true;
+
+    /* push=false：清掉返回栈，唤醒后按返回键也不会退回锁屏前的页面 */
+    app_navigator_switch(PAGE_CLOCK, false);
+    ui_sleep_set(true);                     /* 点一下屏幕就回时钟页 */
 }
 
 static bool any_pressed(void)
@@ -97,7 +166,12 @@ static void dim_restore(void)
 static void on_indev_activity(lv_event_t *e)
 {
     (void)e;
+    /* 休眠中且关了「触摸唤醒」：只当没碰，不续期、不恢复亮度、不解锁 */
+    if (s_on && srv_config_get_int(CFG_TOUCH_WAKE, 1) == 0) {
+        return;
+    }
     s_last_act_us = esp_timer_get_time();
+    s_locked      = false;
     dim_restore();
 }
 
@@ -106,12 +180,7 @@ static void dim_tick(lv_timer_t *timer)
     (void)timer;
 
     if (s_on) {
-        return;                     /* 休眠中由休眠自己管亮度 */
-    }
-    if (!dim_enabled()) {
-        /* 关掉自动变暗后，若此刻正暗着就把亮度还回去 */
-        dim_restore();
-        return;
+        return;                     /* 休眠中由休眠自己管亮度，也别重复锁 */
     }
 
     int64_t now = esp_timer_get_time();
@@ -123,15 +192,28 @@ static void dim_tick(lv_timer_t *timer)
 
     if (hold || any_pressed()) {
         s_last_act_us = now;
+        s_locked      = false;
         dim_restore();
         return;
     }
 
-    if (!s_dimmed && (now - s_last_act_us) >= dim_after_us()) {
-        s_dimmed = true;
-        bsp_display_brightness_set(dim_brightness());
-        ESP_LOGI(TAG, "闲置 %d 秒，亮度降到 %d%%",
-                 (int)(dim_after_us() / 1000000), dim_brightness());
+    /* 先变暗 */
+    if (dim_enabled()) {
+        if (!s_dimmed && (now - s_last_act_us) >= dim_after_us()) {
+            s_dimmed = true;
+            bsp_display_brightness_set(dim_brightness());
+            ESP_LOGI(TAG, "闲置 %d 秒，亮度降到 %d%%",
+                     (int)(dim_after_us() / 1000000), dim_brightness());
+        }
+    } else {
+        /* 关掉自动变暗后，若此刻正暗着就把亮度还回去 */
+        dim_restore();
+    }
+
+    /* 再锁屏：比变暗晚一档，且正在听/录/响铃时不锁 */
+    if (lock_enabled() && !s_locked &&
+        (now - s_last_act_us) >= lock_after_us() && !keep_awake()) {
+        lock_screen();
     }
 }
 
@@ -166,10 +248,14 @@ void ui_sleep_set(bool on)
     ESP_LOGI(TAG, "%s", on ? "已休眠（关屏）" : "已唤醒");
 }
 
-/* 睡着的时候用户第一反应是戳屏幕，所以点哪都醒 */
+/* 睡着的时候用户第一反应是戳屏幕，所以点哪都醒；
+ * 关掉「触摸唤醒」后这一下不亮屏，只能按 BOOT 键 */
 static void on_layer_click(lv_event_t *e)
 {
     (void)e;
+    if (srv_config_get_int(CFG_TOUCH_WAKE, 1) == 0) {
+        return;
+    }
     ui_sleep_set(false);
 }
 
@@ -209,6 +295,7 @@ void ui_sleep_init(void)
 
     s_on = false;
     s_dimmed = false;
+    s_locked = false;
     s_last_act_us = esp_timer_get_time();
 
     /* BOOT 键统一在这里处理（srv_input 是单回调槽，闹钟那边不再抢） */
@@ -224,7 +311,9 @@ void ui_sleep_init(void)
     /* 盯着「有没有操作」：闲置超过设定时间就按比例压低亮度 */
     lv_timer_create(dim_tick, DIM_TICK_MS, NULL);
 
-    ESP_LOGI(TAG, "休眠就绪：BOOT 键关屏/唤醒；自动变暗 %s（闲置 %d 秒）",
+    ESP_LOGI(TAG, "休眠就绪：BOOT 键关屏/唤醒；自动变暗 %s（闲置 %d 秒）；自动锁屏 %s（闲置 %d 秒）",
              dim_enabled() ? "开" : "关",
-             (int)(dim_after_us() / 1000000));
+             (int)(dim_after_us() / 1000000),
+             lock_enabled() ? "开" : "关",
+             (int)(lock_after_us() / 1000000));
 }

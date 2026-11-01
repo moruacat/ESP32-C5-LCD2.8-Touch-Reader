@@ -561,9 +561,42 @@ lv_obj_t *ui_row_switch_create(lv_obj_t *row, bool on, lv_event_cb_t cb, void *a
  *  否则电量满格时数字会顶到外壳上 */
 #define BATT_ROOT_W     70
 
+/*! 低于这个电量开始闪烁提醒（%） */
+#define BATT_BLINK_PCT  15
+/*! 闪烁半周期（ms）：亮红 / 压暗 各 500ms，一闪一暗 */
+#define BATT_BLINK_MS   500
+
 static lv_obj_t *s_batt_root = NULL;
 static lv_obj_t *s_batt_fill = NULL;
 static lv_obj_t *s_batt_pct  = NULL;
+
+/* 低电量闪烁：只在真的低电量时才跑，其余时间定时器是暂停的 */
+static lv_timer_t *s_batt_timer   = NULL;
+static bool        s_batt_blink_on = true;
+
+/* 停下闪烁并把电量条恢复成常亮 */
+static void batt_blink_stop(void)
+{
+    if (s_batt_timer != NULL) {
+        lv_timer_pause(s_batt_timer);
+    }
+    s_batt_blink_on = true;
+    if (s_batt_fill != NULL) {
+        lv_obj_set_style_bg_opa(s_batt_fill, LV_OPA_COVER, 0);
+    }
+}
+
+static void batt_blink_tick(lv_timer_t *t)
+{
+    if (s_batt_fill == NULL) {
+        lv_timer_pause(t);              /* 页面没了，先停着等下个页面再开 */
+        return;
+    }
+    s_batt_blink_on = !s_batt_blink_on;
+
+    /* 用透明度做明暗交替：比藏着电量条「忽隐忽现」稳，也不会让数字跟着跳 */
+    lv_obj_set_style_bg_opa(s_batt_fill, s_batt_blink_on ? LV_OPA_COVER : LV_OPA_30, 0);
+}
 
 /**
  * @brief 图标随页面销毁时把 static 指针置空
@@ -584,6 +617,12 @@ static void batt_del_cb(lv_event_t *e)
     s_batt_root = NULL;
     s_batt_fill = NULL;
     s_batt_pct  = NULL;
+
+    /* 定时器不跟着对象走（不是子对象），得自己停 —— 否则它下一拍还会去写 s_batt_fill */
+    if (s_batt_timer != NULL) {
+        lv_timer_pause(s_batt_timer);
+    }
+    s_batt_blink_on = true;
 }
 
 lv_obj_t *ui_battery_create(lv_obj_t *parent, lv_align_t align,
@@ -654,6 +693,7 @@ void ui_battery_set(int pct, bool valid)
     }
     if (!valid) {
         lv_obj_add_flag(s_batt_root, LV_OBJ_FLAG_HIDDEN);
+        batt_blink_stop();
         return;
     }
     lv_obj_remove_flag(s_batt_root, LV_OBJ_FLAG_HIDDEN);
@@ -672,8 +712,27 @@ void ui_battery_set(int pct, bool valid)
     lv_label_set_text(s_batt_pct, buf);
 
     /* 低电量变红 */
-    lv_obj_set_style_bg_color(s_batt_fill,
-                              (pct <= 20) ? UI_COLOR_TEMP : UI_COLOR_OK, 0);
+    bool low = (pct <= 20);
+    lv_obj_set_style_bg_color(s_batt_fill, low ? UI_COLOR_TEMP : UI_COLOR_OK, 0);
+
+    /* 百分比数字也跟着变红：闪烁只有外壳那么大一块，数字一起变色更醒目 */
+    lv_obj_set_style_text_color(s_batt_pct, low ? UI_COLOR_TEMP : UI_COLOR_TEXT_DIM, 0);
+
+    /* 很低电（≤15%）时让电量条闪起来。每次刷新都从「亮」重新起算，
+     * 免得刚好在暗的那半拍刷新，用户看到的是暗条还以为没在闪。 */
+    if (pct <= BATT_BLINK_PCT) {
+        if (s_batt_timer == NULL) {
+            s_batt_timer = lv_timer_create(batt_blink_tick, BATT_BLINK_MS, NULL);
+        }
+        if (s_batt_timer != NULL) {
+            s_batt_blink_on = true;
+            lv_obj_set_style_bg_opa(s_batt_fill, LV_OPA_COVER, 0);
+            lv_timer_reset(s_batt_timer);
+            lv_timer_resume(s_batt_timer);
+        }
+    } else {
+        batt_blink_stop();
+    }
 }
 
 /* ===================== SD 卡图标 ===================== */

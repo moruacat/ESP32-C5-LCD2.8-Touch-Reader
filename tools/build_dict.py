@@ -3,8 +3,12 @@
 
 数据源
 ------
-- `words/ecdict.csv`（MIT 授权，个人自用；770k 行，66MB）
+- `words/ecdict.csv`（MIT 授权，个人自用；770k 行，66MB）→ 英→中
+- `words/cedict_ts.u8`（CC-CEDICT，CC BY-SA 4.0，12.5 万条，见 tools/_zh_dict.py）→ 中→英
 - `tools/_manual_defs.py` 里的人工释义（786 条，最高优先）与 REMOVE（5 条）
+
+两侧合并进**同一张表**（同一份索引/同一套查找代码），中文词按 UTF-8 字节序排在
+ASCII 词之后，所以查词页不用分流：输入英文查英→中，输入中文查中→英。
 
 产物格式（详见 .trae/documents/离线词典升级与词级直译.md）
 ----------------------------------------------------------
@@ -24,6 +28,7 @@ dict.idx 头 24B（magic "DCTX" | ver u16 | step u16 | count u32 | size u32 | 8B
     python tools/build_dict.py --only-data      # 只出数据，不做缺字/拷贝
     python tools/build_dict.py --update-hanzi   # 把缺字追加进 font/hanzi.txt
     python tools/build_dict.py --no-copy        # 不写 sim/sd/dict
+    python tools/build_dict.py --no-zh          # 不合并 CC-CEDICT（只出英→中）
     python tools/build_dict.py --limit 3000     # 小样本调试（只取前 N 条）
 """
 
@@ -40,6 +45,7 @@ from collections import Counter, OrderedDict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _manual_defs as MD          # noqa: E402  人工释义表（必须保留）
+import _zh_dict as ZD              # noqa: E402  CC-CEDICT 中→英（合并进同一张表）
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EC_CSV = os.path.join(ROOT, "words", "ecdict.csv")
@@ -419,6 +425,7 @@ def main():
     ap.add_argument('--only-data', action='store_true', help='只出数据，不补字/不拷贝')
     ap.add_argument('--update-hanzi', action='store_true', help='把缺字写回 font/hanzi.txt')
     ap.add_argument('--no-copy', action='store_true', help='不写 sim/sd/dict')
+    ap.add_argument('--no-zh', action='store_true', help='不合并 CC-CEDICT（只出英→中）')
     args = ap.parse_args()
 
     print('[1/6] 读 ecdict 并选词 …')
@@ -479,6 +486,53 @@ def main():
     stats['variant_added'] = added
     stats['lemma_filled'] = sum(1 for e in entries.values() if e['lemma'])
 
+    print('[2b/6] 合并 CC-CEDICT 中→英词条 …')
+    zh_words = []
+    if not args.no_zh:
+        zh = ZD.load(stats)
+        added_zh = collide = 0
+        for w, e in zh.items():
+            if w in entries:
+                collide += 1          # 极少数带 ASCII 的条目（已过滤）不会到这
+                continue
+            entries[w] = e
+            zh_words.append(w)
+            added_zh += 1
+        stats['zh_added'] = added_zh
+        stats['zh_collide'] = collide
+        print('      中→英新增 %d 条，重名跳过 %d 条' % (added_zh, collide))
+    else:
+        print('      --no-zh：跳过')
+
+    print('[2c/6] 中文字形可用性过滤（词头 / 繁体）…')
+    cmap = load_cmap()
+    dz = dl = 0
+    for w in zh_words:
+        e = entries.get(w)
+        if e is None:
+            continue
+        if cmap is not None:
+            if any(ord(c) > 127 and ord(c) not in cmap for c in w):
+                del entries[w]                 # 词头有字出不来方框，整条不要
+                dz += 1
+                continue
+            if e['lemma'] and any(ord(c) not in cmap for c in e['lemma']):
+                e['lemma'] = ''                # 繁体显示不了就只留简体
+                dl += 1
+        else:
+            # 没有 fontTools：拿 hanzi.txt 当代理。偏严（字库里有、但当前字体
+            # 没烘进去的字也会被挡掉），可另一边绝不会出现方框
+            if any(c not in HANZI_ALL for c in w):
+                del entries[w]
+                dz += 1
+                continue
+            if e['lemma'] and any(c not in HANZI_ALL for c in e['lemma']):
+                e['lemma'] = ''
+                dl += 1
+    stats['zh_word_dropped'] = dz
+    stats['zh_lemma_dropped'] = dl
+    print('      词头没字形丢 %d 条；繁体没字形清空 %d 条' % (dz, dl))
+
     print('[3/6] 写主表 dict.dat …')
     lines = []
     for w in sorted(entries, key=lambda s: s.encode('utf-8')):
@@ -503,9 +557,10 @@ def main():
             f.write(struct.pack('<I', off))
             f.write(key + b'\0' * (KEY_BYTES - len(key)))
 
-    # 缺字统计（释义里用到、但 hanzi.txt 没有的字）
+    # 缺字统计（词头 / 繁体 / 释义里用到、但 hanzi.txt 没有的字）
     for ln in lines:
-        for ch in ln.split('\t')[2]:
+        f = ln.split('\t')
+        for ch in f[0] + f[2] + f[4]:
             if ord(ch) > 127:
                 used_chars.add(ch)
                 if ch not in HANZI_ALL:
@@ -566,6 +621,22 @@ def copy_to_sim():
             if not os.path.exists(bak):
                 os.replace(old, bak)
                 print('      旧文件改名为 %s' % os.path.relpath(bak, ROOT))
+
+
+def load_cmap():
+    """源字体的 cmap（码点 → 字形名）；没有 fontTools 就返回 None。
+
+    中文字词要按「当前字体到底有没有这个字形」判断 —— font/hanzi.txt 只是**要烘进
+    字体**的字符表，一开始并不包含繁体写法，光看它会把能显示的繁体也当成缺字。
+    """
+    try:
+        from fontTools.ttLib import TTFont
+    except ImportError:
+        print('      （没装 fontTools，中文字形改用 font/hanzi.txt 判定，偏严）')
+        return None
+    if not os.path.exists(TTF):
+        return None
+    return TTFont(TTF, lazy=True).getBestCmap()
 
 
 def drop_chars():

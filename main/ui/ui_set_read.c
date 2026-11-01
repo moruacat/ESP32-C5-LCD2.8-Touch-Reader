@@ -32,6 +32,7 @@ static const read_item_t s_items[] = {
 
 static lv_obj_t *s_val_lb[ITEM_COUNT];
 static lv_obj_t *s_keep_lb;         /*!< 「阅读时不暗屏」的开关文字 */
+static lv_obj_t *s_recent_lb;       /*!< 「最近阅读优先」的开关文字 */
 
 static void read_refresh(void)
 {
@@ -42,6 +43,7 @@ static void read_refresh(void)
     }
 
     ui_row_switch_set(s_keep_lb, srv_config_get_int(CFG_READ_KEEP_BRIGHT, 0) != 0);
+    ui_row_switch_set(s_recent_lb, srv_config_get_int(CFG_SHELF_RECENT, CFG_DEF_SHELF_RECENT) != 0);
 }
 
 /* ===================== 交互 ===================== */
@@ -69,6 +71,14 @@ static void on_keep_click(lv_event_t *e)
     read_refresh();
 }
 
+static void on_recent_click(lv_event_t *e)
+{
+    (void)e;
+    bool on = srv_config_get_int(CFG_SHELF_RECENT, CFG_DEF_SHELF_RECENT) == 0;
+    srv_config_set_int(CFG_SHELF_RECENT, on ? 1 : 0, true);
+    read_refresh();
+}
+
 static void on_reset_ok(void *arg)
 {
     (void)arg;
@@ -77,6 +87,7 @@ static void on_reset_ok(void *arg)
         srv_config_set_int(s_items[i].key, s_items[i].def, false);
     }
     srv_config_set_int(CFG_READ_KEEP_BRIGHT, 0, false);
+    srv_config_set_int(CFG_SHELF_RECENT, CFG_DEF_SHELF_RECENT, false);
     srv_config_save();
 
     read_refresh();
@@ -107,7 +118,11 @@ void ui_set_read_create(lv_obj_t *root)
     lv_obj_t *row = ui_row_create(list, UI_ROW_Y(ITEM_COUNT), &ic_book_open, "阅读时不暗屏");
     s_keep_lb = ui_row_switch_create(row, false, on_keep_click, NULL);
 
-    row = ui_row_create(list, UI_ROW_Y(ITEM_COUNT + 1), NULL, "恢复默认");
+    /* 越后读的书越靠前；排序记录在 /books/.recent */
+    row = ui_row_create(list, UI_ROW_Y(ITEM_COUNT + 1), &ic_book_open, "最近阅读优先");
+    s_recent_lb = ui_row_switch_create(row, false, on_recent_click, NULL);
+
+    row = ui_row_create(list, UI_ROW_Y(ITEM_COUNT + 2), NULL, "恢复默认");
     ui_row_btn_create(row, -8, 64, "恢复", on_reset_click, NULL);
 
     read_refresh();
