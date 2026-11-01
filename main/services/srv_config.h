@@ -29,6 +29,9 @@ typedef struct {
     int32_t volume;                                     /*!< 全局音量 0-100 */
     int32_t dim_en;                                     /*!< 自动降低亮度开关 0/1 */
     int32_t dim_after;                                  /*!< 无操作多少秒后自动降低亮度 */
+    int32_t lock_en;                                    /*!< 自动锁屏开关 0/1 */
+    int32_t lock_after;                                 /*!< 无操作多少秒后自动锁屏（回时钟页并关屏） */
+    int32_t touch_wake;                                 /*!< 触摸是否唤醒休眠中的屏幕 0/1 */
     int32_t fast_home;                                  /*!< 快速返回主页开关 0/1 */
     int32_t bat_cal_k;                                  /*!< 电池电压修正系数（千分比，1000 = 未校准） */
     int32_t safe_mode;                                  /*!< 安全模式开关 0/1（落盘，重启保留） */
@@ -53,6 +56,7 @@ typedef struct {
     int32_t read_line_space;                            /*!< 行距 */
     int32_t read_para_space;                            /*!< 段距：一格 10 = 段间一个空行 */
     int32_t read_keep_bright;                           /*!< 阅读器里不自动降亮度 0/1 */
+    int32_t shelf_recent;                               /*!< 书架按最近阅读排序 0/1 */
 
     /* 传感器 */
     int32_t temp_rec_en;                                /*!< 温湿度记录开关 0/1 */
@@ -77,6 +81,9 @@ typedef struct {
 #define CFG_VOLUME          "volume"
 #define CFG_DIM_EN          "dim_en"
 #define CFG_DIM_AFTER       "dim_after"
+#define CFG_LOCK_EN         "lock_en"
+#define CFG_LOCK_AFTER      "lock_after"
+#define CFG_TOUCH_WAKE      "touch_wake"
 #define CFG_FAST_HOME       "fast_home"
 #define CFG_BAT_CAL_K       "bat_cal_k"
 #define CFG_SAFE_MODE       "safe_mode"
@@ -92,6 +99,7 @@ typedef struct {
 #define CFG_READ_LINE_SP    "read_line_space"
 #define CFG_READ_PARA_SP    "read_para_space"
 #define CFG_READ_KEEP_BRIGHT "read_keep_bright"
+#define CFG_SHELF_RECENT    "shelf_recent"
 #define CFG_TEMP_REC_EN     "temp_rec_en"
 #define CFG_TIMER_SOUND     "timer_sound"
 #define CFG_MOTION_FLIP     "motion_flip"
@@ -114,6 +122,14 @@ typedef struct {
 #define CFG_DEF_DIM_EN          1
 /*! 默认闲置多久后自动降低亮度（秒） */
 #define CFG_DEF_DIM_AFTER       30
+/*! 自动锁屏默认开：闲置久了回时钟页并关屏，界面不会一直停在别处 */
+#define CFG_DEF_LOCK_EN         1
+/*! 默认闲置多久后自动锁屏（秒）；比变暗晚，先暗后锁 */
+#define CFG_DEF_LOCK_AFTER      120
+/*! 触摸默认唤醒休眠中的屏幕；关掉后只能用 BOOT 键唤醒 */
+#define CFG_DEF_TOUCH_WAKE      1
+/*! 书架默认按最近阅读排序（关掉按扫描顺序） */
+#define CFG_DEF_SHELF_RECENT    1
 /*! 「快速返回主页」默认关：先保持原来的逐级返回习惯 */
 #define CFG_DEF_FAST_HOME       0
 /*! 默认时区：UTC+8 */

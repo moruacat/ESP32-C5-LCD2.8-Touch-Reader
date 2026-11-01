@@ -15,7 +15,23 @@
 
 /* SPI LCD configuration */
 #define BSP_LCD_SPI_NUM             SPI2_HOST                       /*!< LCD SPI host number */
-#define BSP_LCD_PIXEL_CLOCK_HZ      (20 * 1000 * 1000)               /*!< LCD pixel clock frequency */
+/* LCD SCLK（唯一的时钟来源，驱动里不再硬编码）。
+ *
+ * 为什么不是 80 MHz：
+ *   1) ST7789 四线串行接口的写周期下限 tSCYCW 约 66 ns，即 ≈15 MHz；驱动里原来硬编码
+ *      80 MHz，是规格的 5 倍，余量为负。
+ *   2) esp_lcd 打开 .psram_dma_direct 后颜色数据由 PSRAM 直接喂给 SPI DMA，
+ *      esp_lcd_io_spi.h 对该 flag 的官方注释明确写着 "has speed limit"。
+ *      80 MHz 同时压在这条 PSRAM 直读通路上。
+ *   现象：每次刷新时随机出现的红色线条 / 个别像素或整行错位（图像与文字边缘最明显），
+ *   且随刷新位置到处跑 —— 典型的高速串行数据错位特征。
+ *
+ * 取值阶梯（只改这一个宏，驱动会自动跟随）：
+ *   80 MHz  原值      ：负余量，出现错位与红线
+ *   40 MHz  当前值    ：2 倍余量，整屏 320x240x2=153,600 B 刷新约 31 ms（≈32 fps）
+ *   20 MHz  兜底      ：若仍有残留，降到 20 MHz 换取更稳的时序
+ */
+#define BSP_LCD_PIXEL_CLOCK_HZ      (40 * 1000 * 1000)               /*!< LCD pixel clock frequency */
 
 #ifdef __cplusplus
 extern "C" {

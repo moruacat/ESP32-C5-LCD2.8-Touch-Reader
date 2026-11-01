@@ -21,6 +21,7 @@ idf_component_register(
         "ui/ui_calendar.c"
         "ui/ui_safe_menu.c"
         "ui/ui_dialog.c"
+        "ui/ui_ime.c"
         "ui/ui_alarm_alert.c"
         "ui/ui_sleep.c"
         "ui/ui_timer.c"
@@ -53,7 +54,9 @@ idf_component_register(
         "services/srv_photo.c"
         "services/srv_progress.c"
         "services/srv_dict.c"
+        "services/srv_dict_zh.c"
         "services/srv_library.c"
+        "services/srv_recent.c"
         "services/srv_musiclib.c"
         "services/srv_player.c"
         "services/srv_radio.c"
@@ -93,4 +96,9 @@ idf_component_register(
         esp_audio_codec
         esp_lvgl_adapter
         lvgl
+    PRIV_REQUIRES
+        # ★ main 自己的一堆 services/srv_*.c 和 ui/ui_sleep.c 直接用 esp_timer，
+        #   但这条依赖以前是靠别的组件传递带进来的：传递链一变（比如这次换 lvgl 包）
+        #   就报 "esp_timer.h: No such file or directory"。自己用的头，自己声明。
+        esp_timer
 )

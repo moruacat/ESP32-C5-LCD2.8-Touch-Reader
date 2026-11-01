@@ -18,6 +18,7 @@ typedef enum {
     SET_TOGGLE = 0,     /*!< 行右侧是钮子开关 */
     SET_DETAIL,         /*!< 点击进入二级页 */
     SET_PASS,           /*!< 点击设置/修改数字密码（照片） */
+    SET_SECTION,        /*!< 分组标题：只显示文字，不可点 */
 } set_kind_t;
 
 typedef struct {
@@ -253,6 +254,16 @@ static void on_row_switch(lv_event_t *e)
 static void build_row(lv_obj_t *parent, int idx, lv_coord_t y)
 {
     const set_item_t *it = &s_items[idx];
+
+    /* 分组标题：只一行灰字，不建行对象、不注册点击 */
+    if (it->kind == SET_SECTION) {
+        lv_obj_t *sec = lv_label_create(parent);
+        lv_obj_set_style_text_color(sec, UI_COLOR_TEXT_DIM, 0);
+        lv_obj_set_style_text_font(sec, &font_ui_14, 0);
+        lv_obj_set_pos(sec, 12, y + 4);
+        lv_label_set_text(sec, it->name);
+        return;
+    }
 
     lv_obj_t *row = ui_row_create(parent, y, it->icon, it->name);
     ui_add_click_feedback(row);

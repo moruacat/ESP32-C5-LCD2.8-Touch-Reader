@@ -25,6 +25,7 @@
 #include "srv_player.h"
 #include "app_navigator.h"
 #include "ui_alarm_alert.h"
+#include "ui_ime.h"
 #include "ui_sleep.h"
 
 static const char *TAG = "app_init";
@@ -67,6 +68,11 @@ void app_init_all(void)
 
     /* 4.1 配置读取（/config.dat，缺失或损坏时用默认值） */
     srv_config_init();
+
+    /* 4.2 中文输入法自检：把「SD 卡上的词库/字库在不在、连续内存够不够」先打一行到日志上。
+     *     只看文件和内存，不加载字体（那要好几 MB 连续块，不能为了自检白占着）；
+     *     放在 SD 卡挂载之后，否则文件都读不到会误报缺文件。 */
+    ui_ime_diag_log();
 
     /* 5. 传感器与 RTC */
     srv_sensors_init();

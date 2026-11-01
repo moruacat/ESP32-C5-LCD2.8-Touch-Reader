@@ -3,8 +3,10 @@
 #include "ui_common.h"
 #include "ui_dialog.h"
 #include "ui_icons.h"
+#include "ui_ime.h"     /* 查词要能打中文，走拼音输入层 */
 #include "app_navigator.h"
 #include "srv_dict.h"
+#include "srv_dict_zh.h"
 #include "srv_sd.h"
 
 #include <stdint.h>
@@ -51,6 +53,8 @@ static lv_obj_t *s_detail_badge;
 static lv_obj_t *s_detail_lemma; /*!< 「→ run 查看」，可点 */
 static lv_obj_t *s_back_btn;     /*!< 详情视图里的「返回」 */
 static lv_obj_t *s_trans;        /*!< 直译视图（滚动容器） */
+static lv_obj_t *s_rel;          /*!< 详情底部的「相关短语」容器（常量见下方「相关短语」节） */
+static char      s_rel_skip[WORD_LEN];        /*!< 当前词，列短语时排除自身 */
 
 static int  s_mode = 0;          /*!< 0=查词 1=译 */
 static char s_word[WORD_LEN];    /*!< 当前查询词 */
@@ -85,8 +89,10 @@ static void words_del_cb(lv_event_t *e)
     s_detail_def   = NULL;
     s_detail_badge = NULL;
     s_detail_lemma = NULL;
+    s_rel          = NULL;
     s_back_btn     = NULL;
     s_trans        = NULL;
+    s_rel_skip[0]   = '\0';
     s_word[0]       = '\0';
     s_sent[0]       = '\0';
     s_lemma_txt[0]  = '\0';
@@ -180,6 +186,9 @@ static void build_badges(const srv_dict_entry_t *e, char *buf, size_t cap)
     }
 }
 
+/* 详情底部的「相关短语」块：实现在下面，try_detail 填完释义后顺手刷它 */
+static void detail_fill_phrases(const srv_dict_entry_t *e);
+
 /**
  * @brief 查整词并切到详情视图（带词形还原）
  * @return false 表示词库里没有这个词（调用方接着做前缀联想）
@@ -187,7 +196,9 @@ static void build_badges(const srv_dict_entry_t *e, char *buf, size_t cap)
 static bool try_detail(const char *word)
 {
     static srv_dict_entry_t e;
-    if (srv_dict_lookup_lemma(word, &e) != ESP_OK) {
+    /* 先查英汉，查不到再查中英（汉字输入） */
+    if (srv_dict_lookup_lemma(word, &e) != ESP_OK &&
+        srv_dict_zh_lookup(word, &e) != ESP_OK) {
         return false;
     }
 
@@ -216,6 +227,7 @@ static bool try_detail(const char *word)
 
     lv_obj_scroll_to_y(s_detail, 0, LV_ANIM_OFF);
     view_show(VIEW_DETAIL);
+    detail_fill_phrases(&e);            /* 释义定下来了才能算短语块的位置 */
     return true;
 }
 
@@ -237,6 +249,110 @@ static void on_detail_back(lv_event_t *e)
     (void)e;
     view_show(s_detail_from_trans ? VIEW_TRANS : VIEW_LIST);
     s_detail_from_trans = false;
+}
+
+/* ===================== 相关短语 =====================
+ *
+ * 放在释义底下，列「以当前词开头、且本身是短语」的词条：查 `look` 能得到
+ * look after / look at / look for …，查 `give up` 能得到 give up on 之类。
+ *
+ * 只收带空格的条目 —— 单词的前缀联想在列表视图里已经有了，详情里再列一遍
+ * 只是噪音；而且「相关短语」这个名字本来就指的是词组。
+ */
+#define REL_TITLE_H  20         /*!< 「相关短语」标题占的高度 */
+#define REL_ROW_H    26
+#define REL_ROW_GAP  4
+#define REL_MAX      6          /*!< 最多列几条 */
+
+/* s_rel / s_rel_skip 的状态声明在文件头的页面状态块里（销毁回调要用） */
+
+/* 点一条短语：跳到查它（跟「→ run 查看」一样，保留“从哪来”） */
+static void on_rel_clicked(lv_event_t *e)
+{
+    lv_obj_t *lb = (lv_obj_t *)lv_obj_get_user_data(lv_event_get_target(e));
+    if (lb == NULL) {
+        return;
+    }
+    bool from_trans = s_detail_from_trans;
+    if (try_detail(lv_label_get_text(lb))) {
+        s_detail_from_trans = from_trans;
+    }
+}
+
+static bool rel_cb(const srv_dict_entry_t *entry, void *arg)
+{
+    int *n = (int *)arg;
+    if (*n >= REL_MAX) {
+        return false;
+    }
+    if (strchr(entry->word, ' ') == NULL) {
+        return true;                        /* 只要短语，跳过单词 */
+    }
+    if (strcmp(entry->word, s_rel_skip) == 0) {
+        return true;                        /* 排除自身 */
+    }
+
+    lv_obj_t *row = lv_button_create(s_rel);
+    lv_obj_set_size(row, BODY_W, REL_ROW_H);
+    lv_obj_set_pos(row, 0, REL_TITLE_H + *n * (REL_ROW_H + REL_ROW_GAP));
+    lv_obj_set_style_radius(row, 6, 0);
+    lv_obj_set_style_bg_color(row, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    ui_add_click_feedback(row);
+
+    lv_obj_t *lb = lv_label_create(row);
+    lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_label_set_text(lb, entry->word);
+    lv_obj_set_width(lb, BODY_W - 24);
+    lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);
+    lv_obj_align(lb, LV_ALIGN_LEFT_MID, 12, 0);
+
+    /* 点击时要知道查哪个词：词标签挂在行对象的 user_data 上（同列表视图） */
+    lv_obj_set_user_data(row, lb);
+    lv_obj_add_event_cb(row, on_rel_clicked, LV_EVENT_CLICKED, NULL);
+
+    (*n)++;
+    return true;
+}
+
+/* 前置声明：详情底部的短语块要用它判断中文/英文 */
+static bool is_zh_text(const char *s);
+
+static void detail_fill_phrases(const srv_dict_entry_t *e)
+{
+    if (s_rel == NULL) {
+        return;
+    }
+
+    lv_obj_clean(s_rel);                    /* 标题和行一起重建，最多 6 行，不心疼 */
+    str_copy_trunc(s_rel_skip, sizeof(s_rel_skip), e->word);
+
+    int n = 0;
+    if (is_zh_text(e->word)) {
+        srv_dict_zh_prefix(e->word, rel_cb, &n, REL_MAX);
+    } else {
+        srv_dict_prefix(e->word, rel_cb, &n, REL_MAX);
+    }
+
+    if (n == 0) {
+        lv_obj_add_flag(s_rel, LV_OBJ_FLAG_HIDDEN);     /* 没有就整块收起来 */
+        return;
+    }
+
+    lv_obj_t *ttl = lv_label_create(s_rel);
+    lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
+    lv_obj_set_pos(ttl, 2, 0);
+    lv_label_set_text(ttl, "相关短语");
+
+    lv_obj_set_size(s_rel, BODY_W, REL_TITLE_H + n * (REL_ROW_H + REL_ROW_GAP));
+
+    /* 释义标签的高度是自适应的（长释义会换行），先让布局算完再贴到它下面 */
+    lv_obj_update_layout(s_detail);
+    lv_obj_set_pos(s_rel, 0, lv_obj_get_y(s_detail_def) + lv_obj_get_height(s_detail_def) + 8);
+    lv_obj_remove_flag(s_rel, LV_OBJ_FLAG_HIDDEN);
 }
 
 /* ===================== 联想 / 建议列表 ===================== */
@@ -525,8 +641,66 @@ static void set_placeholder(void)
  * 常见词很容易撞上整词，自动跳走会让人没法继续挑（比如想查 `run` 的派生词，
  * 刚打完 `run` 就被带进详情，还得退回来）。
  * 没命中时上面是「是不是要找 xxx」，下面是以输入开头的词。 */
+/* 查词结果：中文走 CC-CEDICT，英文走 ECDICT；英文查不到时再按拼音试一次 */
+static bool is_zh_text(const char *s)
+{
+    for (; *s != '\0'; s++) {
+        if ((unsigned char)*s >= 0x80) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int fill_zh_list(const char *prefix, const char *skip)
+{
+    fill_arg_t a = { .count = 0, .skip = skip };
+    srv_dict_zh_prefix(prefix, fill_hit_cb, &a, LIST_MAX);
+    if (a.count > 0) lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);
+    return a.count;
+}
+
+static int fill_zh_pinyin(const char *py)
+{
+    fill_arg_t a = { .count = 0, .skip = NULL };
+    srv_dict_zh_pinyin(py, fill_hit_cb, &a, LIST_MAX);
+    if (a.count > 0) lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);
+    return a.count;
+}
+
+static void show_zh_results(void)
+{
+    lv_obj_clean(s_list);
+    s_row_y = 0;
+
+    static srv_dict_entry_t e;
+    const bool exact = (srv_dict_zh_lookup(s_word, &e) == ESP_OK);
+    if (exact) {
+        add_word_row(&e, true);
+    }
+    int n = fill_zh_list(s_word, exact ? e.word : NULL);
+
+    if (!exact && n == 0) {
+        list_hint("未收录该词");
+    }
+    view_show(VIEW_LIST);
+}
+
 static void show_word_results(void)
 {
+    /* 汉字输入：直接查中英词典（CC-CEDICT） */
+    if (is_zh_text(s_word)) {
+        if (srv_dict_zh_init() == ESP_OK) {
+            show_zh_results();
+        } else {
+            lv_obj_clean(s_list);
+            s_row_y = 0;
+            list_hint("中文词典不可用：SD 卡 /dict 下要有 zhdict.dat / zhdict.idx");
+            view_show(VIEW_LIST);
+        }
+        return;
+    }
+
     lv_obj_clean(s_list);
     s_row_y = 0;
 
@@ -541,6 +715,11 @@ static void show_word_results(void)
         n += fill_suggest(s_word);
     }
     n += fill_list(s_word, exact ? e.word : NULL);
+
+    /* 英文词库没有，再按无声调拼音试一次（pingguo / chuan tong） */
+    if (!exact && n == 0 && srv_dict_zh_init() == ESP_OK) {
+        n += fill_zh_pinyin(s_word);
+    }
 
     if (!exact && n == 0) {
         list_hint("未收录该词");
@@ -633,9 +812,11 @@ static void on_search_clicked(lv_event_t *e)
         return;
     }
     if (s_mode == 1) {
+        /* 翻译要的是英文句子，保持英文键盘 */
         ui_text_input_show("翻译（英文句子）", SENT_LEN, on_text_done, NULL);
     } else {
-        ui_text_input_show("查词", WORD_LEN, on_text_done, NULL);
+        /* 查词可能查中文词，走拼音输入层（这层自带中/英切换，英文单词也照打） */
+        ui_ime_text_input_show("查词", WORD_LEN, on_text_done, NULL);
     }
 }
 
@@ -788,6 +969,17 @@ void ui_words_create(lv_obj_t *root)
     lv_obj_set_width(s_detail_def, BODY_W);
     lv_label_set_long_mode(s_detail_def, LV_LABEL_LONG_WRAP);
     lv_obj_set_pos(s_detail_def, 0, 64);
+
+    /* 相关短语：内容随词变，位置也要等释义高度算出来才知道，所以先建好藏着，
+     * 每次进详情由 detail_fill_phrases() 重建内容并摆到释义下面 */
+    s_rel = lv_obj_create(s_detail);
+    lv_obj_remove_flag(s_rel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(s_rel, BODY_W, REL_TITLE_H);
+    lv_obj_set_style_bg_opa(s_rel, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_rel, 0, 0);
+    lv_obj_set_style_radius(s_rel, 0, 0);
+    lv_obj_set_style_pad_all(s_rel, 0, 0);
+    lv_obj_add_flag(s_rel, LV_OBJ_FLAG_HIDDEN);
 
     /* ===== 直译视图 ===== */
     s_trans = lv_obj_create(root);

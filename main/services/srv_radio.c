@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +41,27 @@ static const char *TAG = "srv_radio";
 #define TASK_PRIO        5
 #define RETRY_MS_MAX     8000
 #define START_SKIP       2          /*!< 起播时跳过窗口最前面的几片，留点缓冲垫 */
+
+/* ---- 抖动缓冲：把「取流」和「写扬声器」拆成两个任务 ----
+ *
+ * 原来取流、解码、写 I2S 都在同一个任务里串行，而写 I2S 是阻塞调用。
+ * 一次分片切换要重新建 HTTP 连接 + 读响应头，这几百毫秒里没人往 I2S 写，
+ * 可 I2S 的 DMA 只兜得住 6×240 帧 ≈30 毫秒 —— 于是每片（约 10 秒）断一下，
+ * 听感就是「微微断续」。现在改成生产者 / 消费者：
+ *   电台任务（生产者）：取流 → 解码 → 灌进环形缓冲，永远不碰 I2S；
+ *   radio_out 任务（消费者）：从环形缓冲取 PCM → 写 I2S，跟着扬声器节拍走。
+ * 切分片时靠缓冲里的存量顶着，声音不会跟着 HTTP 重连一起停。
+ *
+ * 容量按「48 kHz / 16 bit / 双声道 = 192000 B/s」折算。
+ */
+#define RING_BYTES          (256 * 1024)  /*!< 环形缓冲：≈1.36 秒存量（放 PSRAM） */
+#define RING_PREFILL        (96 * 1024)   /*!< 起播先蓄这么多 ≈0.5 秒再开声 */
+#define RING_PREFILL_MIN    (16 * 1024)   /*!< 兜底水位：网络偏慢时别一直等 */
+#define RING_PREFILL_MS     3000          /*!< 兜底水位最多等到这个时间就开声 */
+#define RING_FULL_WAIT_MS   2000          /*!< 缓冲满时最多等这么久，之后丢帧 */
+#define OUT_CHUNK           4096          /*!< 一次写 I2S 的字节数 ≈21 ms@48k 双声道 */
+#define OUT_TASK_STACK      4096
+#define OUT_TASK_PRIO       7             /*!< 必须高于 LVGL(6)：UI 大重绘时也要喂住 DMA */
 
 /*! 状态行缓冲（"正在播放 · 96 kbps" 这种） */
 #define STATUS_MAX       48
@@ -69,6 +91,15 @@ typedef struct {
 
     esp_http_client_handle_t seg;   /*!< 当前分片的连接（NULL = 该开下一片了） */
 
+    /* 抖动缓冲（生产者电台任务写入，消费者 radio_out 任务取走） */
+    uint8_t          *ring;         /*!< 环形缓冲本体（PSRAM） */
+    int               ring_cap;     /*!< 容量（字节，空一格区分满/空） */
+    int               ring_wr;      /*!< 写指针（0..cap-1） */
+    int               ring_rd;      /*!< 读指针（0..cap-1） */
+    bool              primed;       /*!< 存量够不够开声：够 → 消费者开始取 */
+    SemaphoreHandle_t ring_mtx;     /*!< 只在搬数据时短暂持有，不盖住阻塞的 I2S 写 */
+    int64_t           buf_start_us; /*!< 本次起播开始缓冲的时刻（兜底开声用） */
+
     uint32_t first_seq;             /*!< 播放列表里第一片的序号 */
     int      seg_count;             /*!< 本次列表里记下的分片数 */
     char     names[SEG_MAX][SEG_NAME_MAX];
@@ -85,11 +116,15 @@ static volatile srv_radio_state_t s_state = SRV_RADIO_IDLE;
 static char s_status[STATUS_MAX] = "已停止";
 static int  s_kbps = 0;
 
-static TaskHandle_t  s_task = NULL;
-static QueueHandle_t s_q    = NULL;
+static TaskHandle_t  s_task     = NULL;   /*!< 取流/解码任务（生产者） */
+static TaskHandle_t  s_out_task = NULL;   /*!< 写扬声器任务（消费者） */
+static QueueHandle_t s_q        = NULL;
 
 /*! 退避到什么时候才允许再试（0 = 不在退避中） */
 static int64_t s_retry_at_us = 0;
+
+/* 输出任务定义在文件靠后的位置，但 ctx_start 起播时就要先把它拉起来 */
+static bool ensure_out_task(void);
 
 /* ===================== 小工具 ===================== */
 
@@ -141,6 +176,98 @@ static void close_seg(radio_ctx_t *c)
     esp_http_client_close(c->seg);
     esp_http_client_cleanup(c->seg);
     c->seg = NULL;
+}
+
+/* ===================== 抖动缓冲（环形 PCM 缓冲） ===================== */
+
+/* 剩余可读字节数。只在持锁时调用（未持锁时读到的值只当参考用） */
+static int ring_avail(radio_ctx_t *c)
+{
+    int n = c->ring_wr - c->ring_rd;
+    if (n < 0) {
+        n += c->ring_cap;
+    }
+    return n;
+}
+
+/* 清空指针（不释放内存）：起播/停止时用 */
+static void ring_reset(radio_ctx_t *c)
+{
+    c->ring_wr = 0;
+    c->ring_rd = 0;
+    c->primed  = false;
+}
+
+/**
+ * @brief 写入（不阻塞）：返回实际写入的字节数
+ * @note 满了就只写一部分，由调用者决定再等还是丢帧
+ */
+static int ring_push(radio_ctx_t *c, const uint8_t *src, int len)
+{
+    if (c->ring_mtx == NULL || src == NULL || len <= 0) {
+        return 0;
+    }
+    if (xSemaphoreTake(c->ring_mtx, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return 0;
+    }
+
+    int written = 0;
+    if (c->ring != NULL && c->ring_cap > 0) {
+        int free_n = c->ring_cap - 1 - ring_avail(c);
+        if (len > free_n) {
+            len = free_n;
+        }
+        if (len > 0) {
+            int tail  = c->ring_cap - c->ring_wr;
+            int first = (len < tail) ? len : tail;
+            memcpy(c->ring + c->ring_wr, src, (size_t)first);
+            if (len > first) {
+                memcpy(c->ring, src + first, (size_t)(len - first));
+            }
+            c->ring_wr = (c->ring_wr + len) % c->ring_cap;
+            written    = len;
+        }
+    }
+
+    xSemaphoreGive(c->ring_mtx);
+    return written;
+}
+
+/**
+ * @brief 取出（不阻塞）：返回实际取出的字节数
+ */
+static int ring_pop(radio_ctx_t *c, uint8_t *dst, int max)
+{
+    if (c->ring_mtx == NULL || dst == NULL || max <= 0) {
+        return 0;
+    }
+    if (xSemaphoreTake(c->ring_mtx, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return 0;
+    }
+
+    int taken = 0;
+    /* 指针必须在锁里读：ctx_reset 也是在锁里释放缓冲的 */
+    uint8_t *ring = c->ring;
+    int      cap  = c->ring_cap;
+    if (ring != NULL && cap > 0) {
+        int n = ring_avail(c);
+        if (n > max) {
+            n = max;
+        }
+        if (n > 0) {
+            int tail  = cap - c->ring_rd;
+            int first = (n < tail) ? n : tail;
+            memcpy(dst, ring + c->ring_rd, (size_t)first);
+            if (n > first) {
+                memcpy(dst + first, ring, (size_t)(n - first));
+            }
+            c->ring_rd = (c->ring_rd + n) % cap;
+            taken      = n;
+        }
+    }
+
+    xSemaphoreGive(c->ring_mtx);
+    return taken;
 }
 
 /* ===================== 播放列表 ===================== */
@@ -434,7 +561,51 @@ static void open_codec(radio_ctx_t *c)
 }
 
 /**
- * @brief 解一帧并写进扬声器
+ * @brief 把一帧 PCM 整帧灌进抖动缓冲
+ *
+ * 缓冲满就等消费者腾地方（最多 RING_FULL_WAIT_MS）；真等不到宁可丢掉这一帧，
+ * 也绝不把取流这条线堵死 —— 直播少一帧远好过整条链路停住。
+ * 顺手负责“存量够不够开声”的判断：够了就把状态从「缓冲中」翻成「正在播放」，
+ * 消费者看到 primed 才开始取数据，这样起播就有 0.5 秒以上的存量打底。
+ */
+static void push_frame(radio_ctx_t *c, const uint8_t *pcm, int len)
+{
+    int     done     = 0;
+    int64_t deadline = esp_timer_get_time() + (int64_t)RING_FULL_WAIT_MS * 1000;
+
+    while (done < len) {
+        done += ring_push(c, pcm + done, len - done);
+        if (done >= len) {
+            break;
+        }
+        if (esp_timer_get_time() >= deadline) {
+            ESP_LOGW(TAG, "抖动缓冲满，丢掉 %d 字节", len - done);
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));   /* 等消费者腾地方 */
+    }
+
+    if (!c->primed) {
+        int avail = ring_avail(c);
+        bool enough = (avail >= RING_PREFILL) ||
+                      (avail >= RING_PREFILL_MIN &&
+                       esp_timer_get_time() - c->buf_start_us > (int64_t)RING_PREFILL_MS * 1000);
+        if (enough) {
+            c->primed = true;
+            if (s_kbps > 0) {
+                char buf[STATUS_MAX];
+                snprintf(buf, sizeof(buf), "正在播放 · %d kbps", s_kbps);
+                set_status(SRV_RADIO_PLAYING, buf);
+            } else {
+                set_status(SRV_RADIO_PLAYING, "正在播放");
+            }
+            ESP_LOGI(TAG, "缓冲已蓄 %d 字节，开始播放", avail);
+        }
+    }
+}
+
+/**
+ * @brief 解一帧并灌进抖动缓冲
  * @return true = 有进展（解出了数据）
  */
 static bool decode_step(radio_ctx_t *c)
@@ -483,24 +654,15 @@ static bool decode_step(radio_ctx_t *c)
             }
         }
 
-        srv_audio_pcm_write(c->pcm_buf, (int)out.decoded_size);
-
-        if (s_state != SRV_RADIO_PLAYING) {
-            if (s_kbps > 0) {
-                char buf[STATUS_MAX];
-                snprintf(buf, sizeof(buf), "正在播放 · %d kbps", s_kbps);
-                set_status(SRV_RADIO_PLAYING, buf);
-            } else {
-                set_status(SRV_RADIO_PLAYING, "正在播放");
-            }
-        }
+        /* 不直接写 I2S：灌进抖动缓冲，交给 radio_out 任务按扬声器节拍取走 */
+        push_frame(c, c->pcm_buf, (int)out.decoded_size);
         return true;
     }
     return false;
 }
 
 /**
- * @brief 走一小步：没数据就拉数据，有数据就解一帧播出去
+ * @brief 走一小步：没数据就拉数据，有数据就解一帧灌进缓冲
  * @return true = 有进展
  */
 static bool radio_step(radio_ctx_t *c)
@@ -532,6 +694,21 @@ static void ctx_reset(radio_ctx_t *c)
         c->dec = NULL;
     }
 
+    /* 先关门（primed=false 让消费者停下），再在锁里释放缓冲，
+     * 免得消费者正好在搬数据时被 free 掉 */
+    c->primed = false;
+    if (c->ring_mtx != NULL) {
+        xSemaphoreTake(c->ring_mtx, portMAX_DELAY);
+    }
+    free(c->ring);
+    c->ring     = NULL;
+    c->ring_cap = 0;
+    c->ring_wr  = 0;
+    c->ring_rd  = 0;
+    if (c->ring_mtx != NULL) {
+        xSemaphoreGive(c->ring_mtx);
+    }
+
     free(c->in_buf);
     free(c->pcm_buf);
     c->in_buf  = NULL;
@@ -551,13 +728,14 @@ static void ctx_reset(radio_ctx_t *c)
     c->need_playlist = true;
     c->fail_count    = 0;
     c->codec_warned  = false;
+    c->buf_start_us  = 0;
 
     s_retry_at_us = 0;
     s_kbps        = 0;
 }
 
 /**
- * @brief 起播/重连：开解码器和缓冲，等第一次拉列表时对齐直播窗口
+ * @brief 起播/重连：开解码器、抖动缓冲和输出任务，等第一次拉列表时对齐直播窗口
  */
 static void ctx_start(radio_ctx_t *c)
 {
@@ -573,9 +751,17 @@ static void ctx_start(radio_ctx_t *c)
 
     ctx_reset(c);
 
-    c->in_buf  = big_malloc(IN_BUF_BYTES);
-    c->pcm_buf = big_malloc(PCM_BUF_BYTES);
-    c->pcm_cap = (c->pcm_buf != NULL) ? PCM_BUF_BYTES : 0;
+    if (c->ring_mtx == NULL) {
+        c->ring_mtx = xSemaphoreCreateMutex();
+    }
+
+    c->in_buf   = big_malloc(IN_BUF_BYTES);
+    c->pcm_buf  = big_malloc(PCM_BUF_BYTES);
+    c->pcm_cap  = (c->pcm_buf != NULL) ? PCM_BUF_BYTES : 0;
+    c->ring     = big_malloc(RING_BYTES);
+    c->ring_cap = (c->ring != NULL) ? RING_BYTES : 0;
+    ring_reset(c);
+    c->buf_start_us = esp_timer_get_time();
 
     esp_audio_simple_dec_cfg_t cfg = {
         .dec_type      = ESP_AUDIO_SIMPLE_DEC_TYPE_TS,
@@ -583,7 +769,8 @@ static void ctx_start(radio_ctx_t *c)
         .cfg_size      = 0,
         .use_frame_dec = false,
     };
-    if (c->in_buf == NULL || c->pcm_buf == NULL ||
+    if (c->in_buf == NULL || c->pcm_buf == NULL || c->ring == NULL ||
+        c->ring_mtx == NULL || !ensure_out_task() ||
         esp_audio_simple_dec_open(&cfg, &c->dec) != ESP_AUDIO_ERR_OK) {
         ESP_LOGE(TAG, "电台初始化失败");
         ctx_reset(c);
@@ -593,6 +780,75 @@ static void ctx_start(radio_ctx_t *c)
 
     set_status(SRV_RADIO_BUFFERING, "正在连接…");
     ESP_LOGI(TAG, "开始收听 %s", SRV_RADIO_NAME);
+}
+
+/* ===================== 扬声器输出任务（消费者） ===================== */
+
+/*! 输出任务自己的搬运缓冲（只分配一次，跟着任务活） */
+static uint8_t *s_out_buf = NULL;
+
+/**
+ * @brief 只干一件事：把抖动缓冲里的 PCM 按扬声器节拍写进 I2S
+ *
+ * 写 I2S 是阻塞的，所以这个任务必须独立于取流任务 —— 它被 DMA 节拍卡住时，
+ * 取流那边照样能从网络读数据、往缓冲里灌。
+ * 缓冲空了（切分片、网络抖动）：补一段静音把 DMA 喂住。宁可静一下，
+ * 也不要欠载 —— I2S 欠载会“啪”一声，比短暂静音难受得多。
+ */
+static void radio_out_task(void *arg)
+{
+    (void)arg;
+    radio_ctx_t *c = &s_ctx;
+
+    for (;;) {
+        /* 还没开声，或扬声器通道没开（暂停/停止/重连中）：不碰 I2S */
+        if (!c->primed || !srv_audio_pcm_is_open()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        int n = ring_pop(c, s_out_buf, OUT_CHUNK);
+        if (n < 0) {
+            n = 0;
+        }
+        if (n == 0) {
+            /* 缓冲空了（切分片/网络抖动）：补一段静音把 DMA 喂住 */
+            memset(s_out_buf, 0, OUT_CHUNK);
+            n = OUT_CHUNK;
+        }
+        if (srv_audio_pcm_write(s_out_buf, n) < 0) {
+            vTaskDelay(pdMS_TO_TICKS(20));   /* 设备被关/驱动出错：别空转 */
+        }
+    }
+}
+
+static bool ensure_out_task(void)
+{
+    if (s_out_task != NULL) {
+        return true;
+    }
+
+    if (s_out_buf == NULL) {
+        s_out_buf = big_malloc(OUT_CHUNK);
+        if (s_out_buf == NULL) {
+            ESP_LOGE(TAG, "输出缓冲分配失败");
+            return false;
+        }
+    }
+
+    /* 栈放 PSRAM，省内部 RAM（和取流任务一样的做法） */
+    BaseType_t ok = xTaskCreateWithCaps(radio_out_task, "radio_out", OUT_TASK_STACK, NULL,
+                                        OUT_TASK_PRIO, &s_out_task,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ok != pdPASS) {
+        ok = xTaskCreate(radio_out_task, "radio_out", OUT_TASK_STACK, NULL,
+                         OUT_TASK_PRIO, &s_out_task);
+    }
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "输出任务创建失败");
+        return false;
+    }
+    return true;
 }
 
 /* ===================== 电台任务 ===================== */
@@ -646,7 +902,7 @@ static void radio_task(void *arg)
             handle_cmd(c, cmd.cmd);
         }
 
-        /* 播放/缓冲中：不断往解码器喂数据、往扬声器写 PCM */
+        /* 播放/缓冲中：不断往解码器喂数据、把 PCM 灌进抖动缓冲 */
         if (s_state == SRV_RADIO_BUFFERING || s_state == SRV_RADIO_PLAYING) {
             if (!radio_step(c)) {
                 vTaskDelay(pdMS_TO_TICKS(20));   /* 退避 / 等新片时别空转 */

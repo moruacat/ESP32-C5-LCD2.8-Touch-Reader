@@ -26,6 +26,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LINE_MAX = 640
 KEY_BYTES = 8
 
+# 中→英条目（CC-CEDICT）走同一张表，校验规则要随之放宽：
+#   - 词头是汉字（可含夹注点），不是 ASCII 词
+#   - 音标是带声调的拼音（āáǎà…ü + 空格），不是 IPA
+#   - lemma 是繁体写法，是**变体**而不是表内原形，允许不指向表内词
+CJK_RE = re.compile(r'^[\u2e80-\u2eff\u3005\u3400-\u4dbf\u4e00-\u9fff'
+                    r'\uf900-\ufaff\U00020000-\U0003ffff]+$')
+PINYIN_CH = set('abcdefghijklmnopqrstuvwxyz' + 'ü' + 'āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ' + ' ')
+LEMMA_ZH_RE = re.compile(r'^[\u2e80-\u2eff\u3005\u3400-\u4dbf\u4e00-\u9fff'
+                         r'\uf900-\ufaff\U00020000-\U0003ffff]+$')
+
+
+def is_zh_word(w):
+    """词头是纯汉字（中→英条目）。"""
+    return bool(CJK_RE.match(w))
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -60,14 +75,25 @@ def main():
             problems.append('第 %d 行不是 5 字段（TAB 数 %d）：%r' % (i + 1, len(parts) - 1, text[:40]))
             continue
         w, phon, dfn, flags, lemma = parts
-        if not WORD_RE.match(w):
+        zh = is_zh_word(w)
+        if zh:
+            zh_count += 1
+            if lemma and not LEMMA_ZH_RE.match(lemma):
+                problems.append('第 %d 行中→英条目的 lemma 不是汉字：%r → %r'
+                                % (i + 1, w, lemma))
+            for ch in phon:
+                if ch not in PINYIN_CH:
+                    problems.append('第 %d 行拼音越界字符 %r：%s' % (i + 1, ch, w))
+                    break
+        elif not WORD_RE.match(w):
             problems.append('第 %d 行词形非法：%r' % (i + 1, w))
         if not dfn:
             problems.append('第 %d 行释义为空：%r' % (i + 1, w))
-        for ch in phon:
-            if ord(ch) > 127 and ch not in PHON_IPA:
-                problems.append('第 %d 行音标越界字符 %r：%s' % (i + 1, ch, w))
-                break
+        if not zh:
+            for ch in phon:
+                if ord(ch) > 127 and ch not in PHON_IPA:
+                    problems.append('第 %d 行音标越界字符 %r：%s' % (i + 1, ch, w))
+                    break
         if len(dfn.encode('utf-8')) > DEF_MAX_BYTES + 4:
             problems.append('第 %d 行释义超长 %d 字节：%s'
                             % (i + 1, len(dfn.encode('utf-8')), w))

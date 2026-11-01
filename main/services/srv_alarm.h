@@ -36,6 +36,13 @@ int srv_alarm_check_now(void);
 esp_err_t srv_alarm_stop(int index);
 
 /**
+ * @brief 稍后提醒：停掉当前这次，minutes 分钟后重新响
+ * @param index 1..3
+ * @param minutes 建议 5/10
+ */
+esp_err_t srv_alarm_snooze(int index, int minutes);
+
+/**
  * @brief 指定闹钟是否正在响铃
  */
 bool srv_alarm_is_ringing(int index);
