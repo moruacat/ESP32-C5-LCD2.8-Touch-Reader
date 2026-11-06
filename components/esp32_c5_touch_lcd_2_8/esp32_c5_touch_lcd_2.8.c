@@ -123,13 +123,6 @@ static esp_err_t bsp_spi_init(void)
     return ESP_OK;
 }
 
-static esp_err_t bsp_spi_deinit(void)
-{
-    BSP_ERROR_CHECK_RETURN_ERR(spi_bus_free(BSP_LCD_SPI_NUM));
-    spi_sd_initialized = false;
-    return ESP_OK;
-}
-
 void bsp_sdcard_get_sdspi_host(const int slot, sdmmc_host_t *config)
 {
     assert(config);

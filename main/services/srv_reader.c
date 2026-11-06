@@ -40,10 +40,9 @@ static int    s_chapter_cnt = 0;
 static int    s_chapter_idx = 0;
 static int    s_meta_chapters = 0;  /* data.ebfl 里 <book chapters="N"> 声明的章数，0 = 没写 */
 
-/* 当前这一章的名字/卷名：从章节文件首部（<chapter><title>…</title></chapter>）解析，
+/* 当前这一章的名字：从章节文件首部（<chapter><title>…</title></chapter>）解析，
  * 读正文的时候顺手就有，不用再开别的文件。 */
 static char   s_chap_title[TITLE_MAX];
-static char   s_chap_volume[TITLE_MAX];
 static bool   s_chap_has_head = false;
 
 /* 章名索引 chapters.ebfl：一行一名，行序 = 章号。整份读进 PSRAM + 一张行偏移表，
