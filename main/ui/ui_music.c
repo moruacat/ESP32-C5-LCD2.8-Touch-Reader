@@ -7,6 +7,7 @@
 #include "srv_player.h"
 #include "srv_audio.h"
 #include "srv_sd.h"
+#include "srv_fs.h"
 
 #include "esp_log.h"
 
@@ -111,8 +112,55 @@ static void set_row_hl(int idx, bool on)
     lv_obj_set_style_bg_color(s_rows[idx], on ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE, 0);
 }
 
+/* 长按操作：记录时刻和曲目路径。LVGL 松手时还会补发一次 CLICKED，
+ * 不吞掉就会出现「长按弹菜单的同时开始播放」 */
+static uint32_t s_long_tick;
+static char     s_long_path[SRV_FS_PATH_MAX];
+
+static bool swallow_click_after_long(void)
+{
+    if (s_long_tick != 0 && lv_tick_elaps(s_long_tick) < 800) {
+        s_long_tick = 0;
+        return true;
+    }
+    s_long_tick = 0;
+    return false;
+}
+
+static void rebuild_list(void);
+static void panel_refresh(void);
+
+/* 主列表长按外部曲目 → 移出媒体库（普通曲目不加长按，避免误触列表顺序） */
+static void on_lib_remove_ok(void *arg)
+{
+    (void)arg;
+    if (srv_musiclib_remove(s_long_path) == ESP_OK) {
+        ESP_LOGI(TAG, "已移出媒体库: %s", s_long_path);
+    }
+    rebuild_list();
+}
+
+static void on_lib_long(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    const srv_music_t *m = NULL;
+    if (srv_player_queue_item(idx, &m) != ESP_OK || m == NULL || !m->external) {
+        return;
+    }
+    s_long_tick = lv_tick_get();
+    strncpy(s_long_path, m->path, sizeof(s_long_path) - 1);
+    s_long_path[sizeof(s_long_path) - 1] = '\0';
+
+    char note[SRV_MUSIC_NAME_MAX + 48];
+    snprintf(note, sizeof(note), "「%s」只移出媒体库，不删文件", m->name);
+    ui_dialog_confirm("移出媒体库？", note, "移出", on_lib_remove_ok, NULL);
+}
+
 static void on_item(lv_event_t *e)
 {
+    if (swallow_click_after_long()) {
+        return;
+    }
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     (void)srv_player_play_index(idx);
 }
@@ -155,6 +203,7 @@ static void rebuild_list(void)
         lv_obj_set_style_pad_all(row, 0, 0);
         ui_add_click_feedback(row);
         lv_obj_add_event_cb(row, on_item, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(row, on_lib_long, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
 
         lv_obj_t *lb = lv_label_create(row);
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
@@ -510,7 +559,9 @@ static void on_pn_close(lv_event_t *e)
     panel_close();
 }
 
-/* 长按曲目 → 移出当前播放列表（只动列表，不删文件） */
+static int s_long_idx;
+
+/* 普通曲目：只移出播放列表（不删文件） */
 static void on_remove_ok(void *arg)
 {
     int idx = (int)(intptr_t)arg;
@@ -521,12 +572,46 @@ static void on_remove_ok(void *arg)
     rebuild_list();
 }
 
+/* 播放列表面板的长按菜单：0=移出播放列表，1=移出媒体库 */
+static void on_pn_long_menu(int choice, void *arg)
+{
+    (void)arg;
+    if (choice == 0) {
+        if (srv_musiclib_playlist_remove_item(s_long_idx) == ESP_OK) {
+            ESP_LOGI(TAG, "移出播放列表第 %d 首", s_long_idx + 1);
+        }
+    } else if (choice == 1) {
+        if (srv_musiclib_remove(s_long_path) == ESP_OK) {
+            ESP_LOGI(TAG, "已移出媒体库: %s", s_long_path);
+        }
+    } else {
+        return;                         /* 取消 */
+    }
+    panel_refresh();
+    rebuild_list();
+}
+
+/* 长按曲目：普通曲目只移出列表；外部曲目额外给「移出媒体库」 */
 static void on_pn_item_long(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
 
     const srv_music_t *m = NULL;
     if (srv_musiclib_playlist_item(idx, &m) != ESP_OK || m == NULL) {
+        return;
+    }
+
+    s_long_tick = lv_tick_get();
+    s_long_idx  = idx;
+    strncpy(s_long_path, m->path, sizeof(s_long_path) - 1);
+    s_long_path[sizeof(s_long_path) - 1] = '\0';
+
+    if (m->external) {
+        static const ui_menu_item_t items[] = {
+            {"移出播放列表", NULL},
+            {"移出媒体库",   NULL},
+        };
+        ui_menu_show(m->name, items, 2, on_pn_long_menu, NULL);
         return;
     }
 
@@ -537,6 +622,9 @@ static void on_pn_item_long(lv_event_t *e)
 
 static void on_pn_item(lv_event_t *e)
 {
+    if (swallow_click_after_long()) {
+        return;
+    }
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
 
     const srv_music_t *m = NULL;

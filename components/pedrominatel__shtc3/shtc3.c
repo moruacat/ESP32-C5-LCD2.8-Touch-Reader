@@ -80,7 +80,6 @@ esp_err_t shtc3_get_id(i2c_master_dev_handle_t dev_handle, uint8_t *id)
 
  esp_err_t shtc3_get_th(i2c_master_dev_handle_t dev_handle, shtc3_register_rw_t reg, float *data1, float *data2)
 {
-    esp_err_t ret;
     uint8_t b_read[6] = {0};
     uint8_t read_reg[2] = { reg >> 8, reg & 0xff };
 

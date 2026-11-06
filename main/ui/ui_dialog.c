@@ -491,6 +491,16 @@ static void              *s_input_arg;
 static lv_obj_t          *s_input_mask;
 static lv_obj_t          *s_input_ta;
 
+/* 「清空」按钮：一键抹掉输入框内容 */
+static void input_clear_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_input_ta != NULL && lv_obj_is_valid(s_input_ta)) {
+        lv_textarea_set_text(s_input_ta, "");
+        lv_textarea_set_cursor_pos(s_input_ta, 0);
+    }
+}
+
 static void input_close(void)
 {
     if (s_input_mask != NULL && lv_obj_is_valid(s_input_mask)) {
@@ -541,8 +551,8 @@ static void input_ready_cb(lv_event_t *e)
     }
 }
 
-void ui_text_input_show(const char *title, uint32_t max_len,
-                        ui_text_input_cb_t cb, void *arg)
+void ui_text_input_show_init(const char *title, uint32_t max_len, const char *initial,
+                             ui_text_input_cb_t cb, void *arg)
 {
     /* 同时只留一个弹层 */
     ui_alert_close();
@@ -592,6 +602,23 @@ void ui_text_input_show(const char *title, uint32_t max_len,
     lv_label_set_text(clb, "取消");
     lv_obj_center(clb);
 
+    /* 「清空」：一键抹掉输入框，不用长按退格 */
+    lv_obj_t *clr = lv_button_create(box);
+    lv_obj_set_size(clr, 52, 24);
+    lv_obj_align(clr, LV_ALIGN_TOP_RIGHT, -64, 5);
+    lv_obj_set_style_radius(clr, 6, 0);
+    lv_obj_set_style_bg_color(clr, UI_COLOR_BG, 0);
+    lv_obj_set_style_shadow_width(clr, 0, 0);
+    lv_obj_set_style_pad_all(clr, 0, 0);
+    ui_add_click_feedback(clr);
+    lv_obj_add_event_cb(clr, input_clear_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *clr_lb = lv_label_create(clr);
+    lv_obj_set_style_text_font(clr_lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(clr_lb, UI_COLOR_TEXT_DIM, 0);
+    lv_label_set_text(clr_lb, "清空");
+    lv_obj_center(clr_lb);
+
     lv_obj_t *ta = lv_textarea_create(box);
     lv_textarea_set_one_line(ta, true);         /* 单行：不打回车，只滚动显示 */
     lv_textarea_set_max_length(ta, max_len);
@@ -606,6 +633,12 @@ void ui_text_input_show(const char *title, uint32_t max_len,
     lv_obj_add_event_cb(ta, input_ready_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(ta, input_cancel_cb, LV_EVENT_CANCEL, NULL);
     s_input_ta = ta;
+
+    /* 预填上次的内容（查词框再次点开时保留单词/句子，方便改而不是重打） */
+    if (initial != NULL && initial[0] != '\0') {
+        lv_textarea_set_text(ta, initial);
+        lv_textarea_set_cursor_pos(ta, LV_TEXTAREA_CURSOR_LAST);
+    }
 
     lv_obj_t *kb = lv_keyboard_create(mask);
     lv_obj_set_size(kb, UI_SCREEN_W - 16, INPUT_KB_H);
@@ -632,6 +665,13 @@ void ui_text_input_show(const char *title, uint32_t max_len,
     lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_SPECIAL, kb_map_sp, kb_ctrl_sp);
 
     lv_keyboard_set_textarea(kb, ta);           /* 输入框拿到焦点，光标开始闪 */
+}
+
+/* 兼容旧调用：不预填 */
+void ui_text_input_show(const char *title, uint32_t max_len,
+                        ui_text_input_cb_t cb, void *arg)
+{
+    ui_text_input_show_init(title, max_len, NULL, cb, arg);
 }
 
 /* ===================== 数字密码输入层（纯数字键盘） ===================== */

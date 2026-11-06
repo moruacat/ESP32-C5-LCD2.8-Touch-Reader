@@ -24,8 +24,8 @@ typedef struct {
 static const read_item_t s_items[] = {
     {"字距", CFG_READ_LETTER_SP, &ic_letter_spacing,     1,  0},
     {"行距", CFG_READ_LINE_SP,   &ic_line_spacing,       1,  6},
-    /* 段距一格 10：段间只能整行地留空，一格一档，点一下就能看出变化 */
-    {"段距", CFG_READ_PARA_SP,   &ic_paragraph_spacing, 10,  0},
+    /* 段距一格 1：按行内像素微调，想多大就多大 */
+    {"段距", CFG_READ_PARA_SP,   &ic_paragraph_spacing,  1,  0},
 };
 
 #define ITEM_COUNT  (sizeof(s_items) / sizeof(s_items[0]))

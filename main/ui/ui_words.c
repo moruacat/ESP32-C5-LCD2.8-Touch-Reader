@@ -813,10 +813,10 @@ static void on_search_clicked(lv_event_t *e)
     }
     if (s_mode == 1) {
         /* 翻译要的是英文句子，保持英文键盘 */
-        ui_text_input_show("翻译（英文句子）", SENT_LEN, on_text_done, NULL);
+        ui_text_input_show_init("翻译（英文句子）", SENT_LEN, s_sent, on_text_done, NULL);
     } else {
-        /* 查词可能查中文词，走拼音输入层（这层自带中/英切换，英文单词也照打） */
-        ui_ime_text_input_show("查词", WORD_LEN, on_text_done, NULL);
+        /* 查词：预填上一次的词，方便加字母/改错；中文用拼音打 */
+        ui_text_input_show_init("查词", WORD_LEN, s_word, on_text_done, NULL);
     }
 }
 

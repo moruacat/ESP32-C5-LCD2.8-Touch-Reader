@@ -99,6 +99,14 @@ typedef void (*ui_text_input_cb_t)(const char *text, void *arg);
 void ui_text_input_show(const char *title, uint32_t max_len,
                         ui_text_input_cb_t cb, void *arg);
 
+/**
+ * @brief 同上，但输入框预填 initial（再次点开时保留上次内容，方便改）
+ *
+ * @param initial 预填内容，可为 NULL；末尾自动放光标
+ */
+void ui_text_input_show_init(const char *title, uint32_t max_len, const char *initial,
+                             ui_text_input_cb_t cb, void *arg);
+
 /* ===================== 数字密码输入层（纯数字键盘） ===================== */
 
 /**
