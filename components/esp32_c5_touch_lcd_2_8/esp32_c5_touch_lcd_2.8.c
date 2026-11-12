@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "esp_lcd_panel_st7789.h"
+#include "esp_lcd_touch.h"
 #include "esp_lcd_touch_cst3530.h"
 
 #include "esp_codec_dev_defaults.h"
@@ -41,6 +42,9 @@ static esp_lcd_panel_io_handle_t io_handle = NULL;
 #define BSP_LCD_BASE_MIRROR_Y   (false)
 
 static uint16_t s_display_rotation_deg = 0;
+static bool s_touch_base_swap_xy = true;
+static bool s_touch_base_mirror_x = true;
+static bool s_touch_base_mirror_y = false;
 static i2s_chan_handle_t i2s_tx_chan = NULL;
 static i2s_chan_handle_t i2s_rx_chan = NULL;
 static const audio_codec_data_if_t *i2s_data_if = NULL;
@@ -206,10 +210,28 @@ static void display_apply_orientation(lv_display_rotation_t rotation)
         return;
     }
 
-    /* 重要：触摸 flags 保持 BSP 初始化的基准横屏映射，不跟随屏幕旋转。
-     * LVGL 9 的输入层会自动调用 lv_display_rotate_point() 把输入坐标从
-     * 物理基准方向转换到当前逻辑方向；这里再转一次会造成双重旋转。
-     * 典型现象：180° 触摸等价于 0°，90° 坐标越界不可点击。 */
+    /* LVGL 9 的输入层会自动调用 lv_display_rotate_point()，所以触摸 driver
+     * 必须输出「物理基准横屏」坐标，不能把整个旋转再套一遍。
+     *
+     * 但实测这块 CST3530 的原始 X/Y 轴在 90°/270° 下与 ST7789 的硬件扫描
+     * 方向相反：LVGL 自动旋转后整体会差 180°。因此只在这两个角度给触摸
+     * 做一次 180° 预旋转；0°/180° 保持基准映射。 */
+    if (tp != NULL) {
+        bool touch_swap = s_touch_base_swap_xy;
+        bool touch_mx = s_touch_base_mirror_x;
+        bool touch_my = s_touch_base_mirror_y;
+        if (rotation == LV_DISPLAY_ROTATION_90 || rotation == LV_DISPLAY_ROTATION_270) {
+            orient_flags_for_rotation(LV_DISPLAY_ROTATION_180,
+                                      s_touch_base_swap_xy,
+                                      s_touch_base_mirror_x,
+                                      s_touch_base_mirror_y,
+                                      &touch_swap, &touch_mx, &touch_my);
+        }
+        (void)esp_lcd_touch_set_swap_xy(tp, touch_swap);
+        (void)esp_lcd_touch_set_mirror_x(tp, touch_mx);
+        (void)esp_lcd_touch_set_mirror_y(tp, touch_my);
+    }
+
     s_display_rotation_deg = rotation_to_degrees(rotation);
     ESP_LOGI(TAG, "屏幕旋转：%u°，LCD swap=%d mirror=(%d,%d)",
              (unsigned)s_display_rotation_deg, (int)swap_xy, (int)mirror_x, (int)mirror_y);
@@ -873,6 +895,9 @@ lv_display_t *bsp_display_start_with_config(bsp_display_cfg_t *cfg)
     lv_display_t *disp = bsp_display_lcd_init(cfg);
     BSP_NULL_CHECK(disp, NULL);
 
+    s_touch_base_swap_xy = cfg->touch_flags.swap_xy != 0;
+    s_touch_base_mirror_x = cfg->touch_flags.mirror_x != 0;
+    s_touch_base_mirror_y = cfg->touch_flags.mirror_y != 0;
     disp_indev = bsp_display_indev_init(cfg, disp);
     BSP_NULL_CHECK(disp_indev, NULL);
 
