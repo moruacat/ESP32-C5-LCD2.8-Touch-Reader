@@ -1,6 +1,5 @@
 # ===== 构建产物 =====
 build/
-sim/build/
 managed_components/
 .idf-cache/
 __pycache__/
@@ -12,23 +11,17 @@ __pycache__/
 # ===== 大型原始数据（本地保留，不入库）=====
 # ECDICT 原始词库 66MB，用 tools/build_dict.py 从本地这份重新生成
 words/ecdict.csv
-
-# 模拟器/固件用的大型媒体与词库生成物（可由脚本重建）
-sim/sd/books/
-sim/sd/music/
-sim/sd/photos/
-sim/sd/DCIM/
-sim/sd/record/
-sim/sd/temp-rec/
-sim/sd/system_update/
-photos/
+# CC-CEDICT 中文词库（原始下载包与解压结果），只保留 words 下的单元词表
+words/cedict*
+# 词典数据：主词典与中文词典都是生成的二进制，体积大
 dict/dict.dat
 dict/dict.idx
-dict/dict.csv.bak
-sim/sd/dict/dict.dat
-sim/sd/dict/dict.idx
-sim/sd/dict/dict.csv.bak
-sim/sd/dict/variants.idx
+dict/zhdict*
+photos/
+
+# ===== 模拟器（仅本地调试用）=====
+sim/
+sdcard/
 
 # ===== 本地环境 =====
 tools/venv/
@@ -36,10 +29,9 @@ tools/venv/
 *.log
 *.bak
 main/assets/fonts/*.bak
-sim/sd/*.dat
-sim/sd/**/*.dat
-sim/sd/System Volume Information/
-sim/err.txt
-sim/out.txt
 tools/netprobe.out.txt
 tools/t.txt
+
+.dumate/
+.trae/
+.screenshots/
