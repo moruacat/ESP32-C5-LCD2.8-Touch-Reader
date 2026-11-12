@@ -92,6 +92,7 @@ static lv_obj_t     *s_screen  = NULL;
 /* 运行时方向状态：重启后从 srv_config 恢复；页面切换前先按它设置硬件/逻辑方向。 */
 static uint16_t s_rot_bookshelf = 0;   /* 书架与阅读器共用 */
 static uint16_t s_rot_music     = 0;
+static uint16_t s_rot_words     = 0;   /* 单词主页/变形/学习共用 */
 
 /* 这些页面自己要用横向滑动（翻页 / 操作游戏 / 涂鸦 / 拨球 / 切照片），
  * 不能再兼做「右滑返回」，否则两个动作会抢同一个手势。它们的退出都走标题栏返回键。 */
@@ -151,14 +152,18 @@ static void rotation_state_load(void)
 {
     s_rot_bookshelf = normalize_rotation(srv_config_get_int(CFG_ROT_BOOKSHELF, CFG_DEF_ROT));
     s_rot_music = normalize_rotation(srv_config_get_int(CFG_ROT_MUSIC, CFG_DEF_ROT));
-    ESP_LOGI(TAG, "加载页面方向：书架/阅读器=%u°，音乐=%u°",
-             (unsigned)s_rot_bookshelf, (unsigned)s_rot_music);
+    s_rot_words = normalize_rotation(srv_config_get_int(CFG_ROT_WORDS, CFG_DEF_ROT));
+    ESP_LOGI(TAG, "加载页面方向：书架/阅读器=%u°，音乐=%u°，单词=%u°",
+             (unsigned)s_rot_bookshelf, (unsigned)s_rot_music, (unsigned)s_rot_words);
 }
 
 static uint16_t *page_rotation_slot(app_page_id_t page)
 {
     if (page == PAGE_MUSIC) {
         return &s_rot_music;
+    }
+    if (page == PAGE_WORDS || page == PAGE_WORD_FORMS || page == PAGE_WORD_STUDY) {
+        return &s_rot_words;
     }
     if (page == PAGE_BOOKSHELF || page == PAGE_READER) {
         return &s_rot_bookshelf;
@@ -303,7 +308,10 @@ void app_navigator_toggle_page_rotation(void)
     esp_err_t ret = bsp_display_set_rotation(next);
     if (ret == ESP_OK) {
         *slot = next;
-        const char *key = (s_current == PAGE_MUSIC) ? CFG_ROT_MUSIC : CFG_ROT_BOOKSHELF;
+        const char *key = (s_current == PAGE_MUSIC) ? CFG_ROT_MUSIC
+                        : (s_current == PAGE_WORDS || s_current == PAGE_WORD_FORMS ||
+                           s_current == PAGE_WORD_STUDY) ? CFG_ROT_WORDS
+                        : CFG_ROT_BOOKSHELF;
         (void)srv_config_set_int(key, next, true);
         ESP_LOGI(TAG, "页面 %d 旋转到 %u° 并已保存", (int)s_current, (unsigned)next);
         switch_locked_ex(s_current, ANIM_NONE, true);

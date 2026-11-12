@@ -103,6 +103,7 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_SHELF_RECENT,    shelf_recent,      CFG_DEF_SHELF_RECENT, 0, 1),
     /* 书架/阅读器共用方向；运行时只接受 0/270，持久化后下次进页直接按它构屏 */
     I32(CFG_ROT_BOOKSHELF,   rot_bookshelf,     CFG_DEF_ROT,          0, 270),
+    I32(CFG_ROT_WORDS,       rot_words,         CFG_DEF_ROT,          0, 270),
 
     /* 传感器 */
     I32(CFG_TEMP_REC_EN,     temp_rec_en,      1,      0, 1),

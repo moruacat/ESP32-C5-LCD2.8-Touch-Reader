@@ -12,18 +12,19 @@
 /* ===================== 布局 ===================== */
 
 #define BODY_Y      UI_TITLEBAR_H
-#define BODY_H      (UI_SCREEN_H - BODY_Y)
+#define BODY_H      (ui_scr_h() - BODY_Y)
 
 /* 下面这些都是相对选择/学习视图容器（容器顶在 BODY_Y）的坐标 */
 #define LIST_X      8
 #define LIST_Y      34
-#define LIST_W      (UI_SCREEN_W - LIST_X * 2)
+#define LIST_W      (ui_scr_w() - LIST_X * 2)
 #define LIST_H      (BODY_H - LIST_Y - 46)
 #define ROW_H       34
 
-#define CARD_W      260
+/* 横屏保持 260，竖屏按屏幕宽度收紧，左右各留 12px。 */
+#define CARD_W      ((ui_scr_w() > 300) ? 260 : (ui_scr_w() - 24))
 #define CARD_H      140
-#define CARD_X      ((UI_SCREEN_W - CARD_W) / 2)
+#define CARD_X      ((ui_scr_w() - CARD_W) / 2)
 #define CARD_Y      24
 
 #define SWIPE_TH    64          /*!< 超过这个距离松手才算数 */
@@ -216,7 +217,7 @@ static void pick_build(lv_obj_t *parent)
     s_book_lb = lv_label_create(parent);
     lv_obj_set_style_text_font(s_book_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_book_lb, UI_COLOR_TEXT, 0);
-    lv_obj_set_width(s_book_lb, 200);
+    lv_obj_set_width(s_book_lb, ui_scr_w() - 120);
     lv_obj_set_style_text_align(s_book_lb, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_book_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_anim_duration(s_book_lb, 6000, 0);
@@ -224,7 +225,7 @@ static void pick_build(lv_obj_t *parent)
 
     lv_obj_t *next = lv_button_create(parent);
     lv_obj_set_size(next, 28, 24);
-    lv_obj_set_pos(next, UI_SCREEN_W - 36, 4);
+    lv_obj_set_pos(next, ui_scr_w() - 36, 4);
     lv_obj_set_style_radius(next, 6, 0);
     lv_obj_set_style_bg_color(next, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_shadow_width(next, 0, 0);
@@ -250,9 +251,19 @@ static void pick_build(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_unit_list, LV_OPA_50, LV_PART_SCROLLBAR);
     lv_obj_set_style_radius(s_unit_list, 2, LV_PART_SCROLLBAR);
 
-    /* 底部按钮 */
+    /* 底部按钮：横屏维持原宽度；竖屏按可用宽度重新分，避免两键叠在一起。 */
+    const lv_coord_t sw = ui_scr_w();
+    lv_coord_t wrong_w = 140;
+    lv_coord_t start_w = 156;
+    lv_coord_t start_x = sw - 164;
+    if (sw < 300) {
+        wrong_w = (sw - 32) * 45 / 100;
+        start_w = sw - 32 - wrong_w;
+        start_x = sw - 8 - start_w;
+    }
+
     lv_obj_t *wrong = lv_button_create(parent);
-    lv_obj_set_size(wrong, 140, 34);
+    lv_obj_set_size(wrong, wrong_w, 34);
     lv_obj_set_pos(wrong, 8, BODY_H - 42);
     lv_obj_set_style_radius(wrong, 8, 0);
     lv_obj_set_style_bg_color(wrong, UI_COLOR_SURFACE, 0);
@@ -267,8 +278,8 @@ static void pick_build(lv_obj_t *parent)
     lv_obj_center(s_wrong_lb);
 
     lv_obj_t *start = lv_button_create(parent);
-    lv_obj_set_size(start, 156, 34);
-    lv_obj_set_pos(start, UI_SCREEN_W - 164, BODY_H - 42);
+    lv_obj_set_size(start, start_w, 34);
+    lv_obj_set_pos(start, start_x, BODY_H - 42);
     lv_obj_set_style_radius(start, 8, 0);
     lv_obj_set_style_bg_color(start, UI_COLOR_PRIMARY, 0);
     lv_obj_set_style_shadow_width(start, 0, 0);
@@ -549,7 +560,7 @@ static void study_build(lv_obj_t *parent)
     s_hint_lb = lv_label_create(parent);
     lv_obj_set_style_text_font(s_hint_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEXT_DIM, 0);
-    lv_obj_set_width(s_hint_lb, UI_SCREEN_W - 16);
+    lv_obj_set_width(s_hint_lb, ui_scr_w() - 16);
     lv_obj_set_style_text_align(s_hint_lb, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_height(s_hint_lb, font_ui_14.line_height);
     lv_label_set_long_mode(s_hint_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -570,7 +581,7 @@ static void to_study(void)
     if (s_study == NULL) {
         s_study = lv_obj_create(s_root);
         lv_obj_remove_flag(s_study, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(s_study, UI_SCREEN_W, BODY_H);
+        lv_obj_set_size(s_study, ui_scr_w(), BODY_H);
         lv_obj_set_pos(s_study, 0, BODY_Y);
         lv_obj_set_style_bg_color(s_study, UI_COLOR_BG, 0);
         lv_obj_set_style_bg_opa(s_study, LV_OPA_COVER, 0);
@@ -603,6 +614,10 @@ static void to_pick(void)
 static void study_root_del_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_DELETE) {
+        return;
+    }
+    /* 旋转会先建新 root 再异步删旧 root，旧回调不能把新页面的学习状态停掉。 */
+    if (lv_event_get_target(e) != s_root) {
         return;
     }
     srv_wordbook_stop();
@@ -642,7 +657,7 @@ void ui_word_study_create(lv_obj_t *root)
         lv_obj_set_style_text_font(tip, &font_ui_14, 0);
         lv_obj_set_style_text_color(tip, UI_COLOR_TEXT_DIM, 0);
         lv_obj_set_style_text_align(tip, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(tip, UI_SCREEN_W - 32);
+        lv_obj_set_width(tip, ui_scr_w() - 32);
         lv_label_set_long_mode(tip, LV_LABEL_LONG_WRAP);
         lv_label_set_text(tip,
                           "SD 卡 /words 下还没有词书\n\n"
@@ -654,7 +669,7 @@ void ui_word_study_create(lv_obj_t *root)
 
     s_pick = lv_obj_create(root);
     lv_obj_remove_flag(s_pick, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_pick, UI_SCREEN_W, BODY_H);
+    lv_obj_set_size(s_pick, ui_scr_w(), BODY_H);
     lv_obj_set_pos(s_pick, 0, BODY_Y);
     lv_obj_set_style_bg_color(s_pick, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_pick, LV_OPA_COVER, 0);

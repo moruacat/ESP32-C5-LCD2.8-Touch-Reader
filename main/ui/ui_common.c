@@ -292,6 +292,30 @@ lv_obj_t *ui_titlebar_button_create(lv_obj_t *bar, const char *text,
     return btn;
 }
 
+lv_obj_t *ui_titlebar_left_button_create(lv_obj_t *bar, const char *text,
+                                         lv_coord_t left_ofs, lv_coord_t w,
+                                         lv_event_cb_t cb, void *arg)
+{
+    lv_obj_t *btn = lv_button_create(bar);
+    lv_obj_set_size(btn, w, 22);
+    lv_obj_align(btn, LV_ALIGN_LEFT_MID, left_ofs, 0);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_style_bg_color(btn, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    ui_add_click_feedback(btn);
+    if (cb != NULL) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, arg);
+    }
+
+    lv_obj_t *lb = lv_label_create(btn);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(lb, text ? text : "");
+    lv_obj_center(lb);
+    return btn;
+}
+
 /**
  * @brief 标题栏骨架
  * @param with_clock 右侧显示 HH:MM（普通页）；false 时右侧空出来给调用方放按钮（游戏页）

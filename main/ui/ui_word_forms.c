@@ -11,12 +11,12 @@
 
 #define SEARCH_X   8
 #define SEARCH_Y   (UI_TITLEBAR_H + 4)
-#define SEARCH_W   (UI_SCREEN_W - SEARCH_X * 2)
+#define SEARCH_W   (ui_scr_w() - SEARCH_X * 2)
 #define SEARCH_H   32
 #define BODY_X     8
 #define BODY_Y     (SEARCH_Y + SEARCH_H + 6)
-#define BODY_W     (UI_SCREEN_W - BODY_X * 2)
-#define BODY_H     (UI_SCREEN_H - BODY_Y - 4)
+#define BODY_W     (ui_scr_w() - BODY_X * 2)
+#define BODY_H     (ui_scr_h() - BODY_Y - 4)
 
 static lv_obj_t *s_input_lb;    /*!< 搜索框里的文字 */
 static lv_obj_t *s_body;        /*!< 结果滚动容器 */

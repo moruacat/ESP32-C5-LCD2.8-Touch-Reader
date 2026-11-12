@@ -61,6 +61,7 @@ typedef struct {
     int32_t read_auto_sec;                              /*!< 自动翻页间隔（秒） */
     int32_t shelf_recent;                               /*!< 书架按最近阅读排序 0/1 */
     int32_t rot_bookshelf;                              /*!< 书架/阅读器方向：0=横屏，270=竖屏 */
+    int32_t rot_words;                                  /*!< 单词页面方向：0=横屏，270=竖屏 */
 
     /* 传感器 */
     int32_t temp_rec_en;                                /*!< 温湿度记录开关 0/1 */
@@ -109,6 +110,7 @@ typedef struct {
 #define CFG_READ_AUTO_SEC   "read_auto_sec"    /*!< 自动翻页间隔（秒） */
 #define CFG_SHELF_RECENT    "shelf_recent"
 #define CFG_ROT_BOOKSHELF   "rot_bookshelf" /*!< 书架/阅读器方向 0/270 */
+#define CFG_ROT_WORDS       "rot_words"     /*!< 单词页面方向 0/270 */
 #define CFG_ROT_MUSIC       "rot_music"     /*!< 音乐页方向 0/270 */
 #define CFG_TEMP_REC_EN     "temp_rec_en"
 #define CFG_TIMER_SOUND     "timer_sound"

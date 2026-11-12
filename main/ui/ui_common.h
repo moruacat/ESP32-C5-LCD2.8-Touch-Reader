@@ -122,6 +122,14 @@ lv_obj_t *ui_titlebar_button_create(lv_obj_t *bar, const char *text,
                                     lv_event_cb_t cb, void *arg);
 
 /**
+ * @brief 在标题栏返回键右侧放一个工具按钮（旋转等）
+ * @param left_ofs 距标题栏左侧偏移，例如 32
+ */
+lv_obj_t *ui_titlebar_left_button_create(lv_obj_t *bar, const char *text,
+                                         lv_coord_t left_ofs, lv_coord_t w,
+                                         lv_event_cb_t cb, void *arg);
+
+/**
  * @brief 统一标题栏：标题居中、左侧返回键、右侧 HH:MM
  * @param back_cb 传 NULL 则不显示左侧返回键（主菜单那种手势返回的页面）
  * @return 标题栏对象；后续可用 ui_titlebar_set_title() 改标题

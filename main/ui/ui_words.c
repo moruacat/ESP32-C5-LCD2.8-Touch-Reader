@@ -19,15 +19,15 @@
 /* 搜索框右侧让出两个小按钮：「变形」「学习」 */
 #define ENTRY_W      48
 #define ENTRY_H      32
-#define ENTRY_STUDY_X (UI_SCREEN_W - SEARCH_X - ENTRY_W)
+#define ENTRY_STUDY_X (ui_scr_w() - SEARCH_X - ENTRY_W)
 #define ENTRY_FORM_X  (ENTRY_STUDY_X - ENTRY_W - 4)
 #define SEARCH_W     (ENTRY_FORM_X - SEARCH_X - 4)
 #define SEARCH_H     32
 
 #define BODY_X       8
 #define BODY_Y       (SEARCH_Y + SEARCH_H + 6)
-#define BODY_W       (UI_SCREEN_W - BODY_X * 2)
-#define BODY_H       (UI_SCREEN_H - BODY_Y - 4)
+#define BODY_W       (ui_scr_w() - BODY_X * 2)
+#define BODY_H       (ui_scr_h() - BODY_Y - 4)
 
 #define ROW_H        36
 #define ROW_GAP      4
@@ -40,7 +40,7 @@
 /* 标题栏右侧两个模式按钮 */
 #define TAB_W        44
 #define TAB_H        20
-#define TAB_TRANS_X  (UI_SCREEN_W - TAB_W - 8)
+#define TAB_TRANS_X  (ui_scr_w() - TAB_W - 8)
 #define TAB_WORD_X   (TAB_TRANS_X - TAB_W - 4)
 
 /* ===================== 页面状态 ===================== */
@@ -854,6 +854,12 @@ static void on_entry_clicked(lv_event_t *e)
     app_navigator_switch(page, true);
 }
 
+static void on_rotate_clicked(lv_event_t *e)
+{
+    (void)e;
+    app_navigator_toggle_page_rotation();
+}
+
 void ui_words_create(lv_obj_t *root)
 {
     s_mode = 0;
@@ -862,24 +868,25 @@ void ui_words_create(lv_obj_t *root)
     s_lemma_txt[0] = '\0';
     s_detail_from_trans = false;
 
-    /* 标题栏不要右侧时钟（右边留给两个模式按钮） */
-    ui_titlebar_create_plain(root, "单词", app_navigator_back_cb, NULL);
+    /* 标题栏不要右侧时钟（右边留给两个模式按钮），旋转键放返回键右侧。 */
+    lv_obj_t *bar = ui_titlebar_create_plain(root, "单词", app_navigator_back_cb, NULL);
+    ui_titlebar_left_button_create(bar, "旋转", 32, 44, on_rotate_clicked, NULL);
     s_tab_word  = make_tab(root, TAB_WORD_X,  "查词", on_tab_word);
     s_tab_trans = make_tab(root, TAB_TRANS_X, "译",   on_tab_trans);
 
     /* 搜索框右侧两个入口：变形查询 / 单词学习 */
     static const struct {
         const char   *text;
-        lv_coord_t    x;
         app_page_id_t page;
     } entries[] = {
-        {"变形", ENTRY_FORM_X,  PAGE_WORD_FORMS},
-        {"学习", ENTRY_STUDY_X, PAGE_WORD_STUDY},
+        {"变形", PAGE_WORD_FORMS},
+        {"学习", PAGE_WORD_STUDY},
     };
     for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
+        const lv_coord_t entry_x = (i == 0) ? ENTRY_FORM_X : ENTRY_STUDY_X;
         lv_obj_t *b = lv_button_create(root);
         lv_obj_set_size(b, ENTRY_W, ENTRY_H);
-        lv_obj_set_pos(b, entries[i].x, SEARCH_Y);
+        lv_obj_set_pos(b, entry_x, SEARCH_Y);
         lv_obj_set_style_radius(b, 8, 0);
         lv_obj_set_style_bg_color(b, UI_COLOR_SURFACE, 0);
         lv_obj_set_style_shadow_width(b, 0, 0);
@@ -987,7 +994,7 @@ void ui_words_create(lv_obj_t *root)
     s_detail_ph = lv_label_create(s_detail);
     lv_obj_set_style_text_color(s_detail_ph, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(s_detail_ph, &font_ipa_14, 0);
-    lv_obj_set_width(s_detail_ph, BODY_W - 150);
+    lv_obj_set_width(s_detail_ph, BODY_W / 2 - 34);
     lv_label_set_long_mode(s_detail_ph, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(s_detail_ph, 34, 23);
 
@@ -995,9 +1002,9 @@ void ui_words_create(lv_obj_t *root)
     s_detail_lemma = lv_label_create(s_detail);
     lv_obj_set_style_text_color(s_detail_lemma, UI_COLOR_PRIMARY, 0);
     lv_obj_set_style_text_font(s_detail_lemma, &font_ui_14, 0);
-    lv_obj_set_width(s_detail_lemma, 130);
+    lv_obj_set_width(s_detail_lemma, BODY_W / 2);
     lv_obj_set_style_text_align(s_detail_lemma, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(s_detail_lemma, BODY_W - 130, 23);
+    lv_obj_set_pos(s_detail_lemma, BODY_W / 2, 23);
     lv_obj_add_flag(s_detail_lemma, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_detail_lemma, on_lemma_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(s_detail_lemma, LV_OBJ_FLAG_HIDDEN);
