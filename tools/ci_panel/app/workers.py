@@ -72,6 +72,71 @@ class RunsWorker(BaseWorker):
             self._fail(str(exc))
 
 
+class GitPushWorker(BaseWorker):
+    """把当前本地分支推送到 origin。
+
+    只执行 git push，不会自动 add/commit；未提交内容不会被推送。
+    """
+
+    def __init__(self, repo_path: Path, branch: str) -> None:
+        super().__init__()
+        self.repo_path = Path(repo_path)
+        self.branch = branch.strip()
+
+    def run(self) -> None:
+        started = time.perf_counter()
+        cmd = ["git", "-C", str(self.repo_path), "push", "origin", self.branch]
+        self.progress.emit(0, 0, f"正在推送 {self.branch} 到 origin...")
+        self.log.emit("执行：" + " ".join(cmd), "muted")
+
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GCM_INTERACTIVE"] = "Never"
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(self.repo_path),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                env=env,
+                creationflags=creationflags,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                self.log.emit(line.rstrip(), "info")
+                if self._cancel.is_set():
+                    proc.terminate()
+                    break
+            code = proc.wait()
+            if self._cancel.is_set():
+                raise WorkerCancelled("推送已取消")
+            if code != 0:
+                raise RuntimeError(
+                    f"git push 失败（退出码 {code}）。请确认本机 Git 凭据、远程地址和分支权限。")
+
+            elapsed = time.perf_counter() - started
+            self.log.emit(f"推送完成：{self.branch} -> origin", "ok")
+            self.done.emit({
+                "error": None,
+                "branch": self.branch,
+                "elapsed": elapsed,
+            })
+        except WorkerCancelled as exc:
+            self._fail(str(exc))
+        except FileNotFoundError as exc:
+            self._fail(f"找不到 git 命令：{exc}")
+        except Exception as exc:
+            self._fail(str(exc))
+
+
 class ArtifactWorker(BaseWorker):
     """下载最新指定 run 的 firmware artifact，并解压到 build/ci/run-<id>。"""
 

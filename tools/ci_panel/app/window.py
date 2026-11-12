@@ -6,6 +6,7 @@ from __future__ import annotations
 import ctypes
 import html
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,7 +24,9 @@ from . import theme
 from .esptool_util import EsptoolTool, find_esptool
 from .github_api import WorkflowRun
 from .settings import Prefs
-from .workers import ArtifactWorker, BaseWorker, FlashWorker, LogsWorker, RunsWorker
+from .workers import (
+    ArtifactWorker, BaseWorker, FlashWorker, GitPushWorker, LogsWorker, RunsWorker,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOWNLOAD_ROOT = REPO_ROOT / "build" / "ci"
@@ -233,6 +236,11 @@ class MainWindow(QMainWindow):
         self.actions_btn = QPushButton("打开 Actions")
         self.actions_btn.setProperty("variant", "ghost")
         self.actions_btn.clicked.connect(self._open_actions_page)
+        self.push_btn = QPushButton("推送")
+        self.push_btn.setProperty("variant", "ghost")
+        self.push_btn.setFixedWidth(64)
+        self.push_btn.setToolTip("推送当前本地分支到 origin；只推送已提交内容，不会自动提交。")
+        self.push_btn.clicked.connect(self._push_git)
         repo_row.addWidget(repo_label)
         repo_row.addWidget(self.repo_edit, 1)
         branch_label = QLabel("分支")
@@ -240,6 +248,7 @@ class MainWindow(QMainWindow):
         repo_row.addWidget(branch_label)
         repo_row.addWidget(self.branch_edit)
         repo_row.addWidget(self.refresh_btn)
+        repo_row.addWidget(self.push_btn)
         repo_row.addWidget(self.actions_btn)
         box.addLayout(repo_row)
 
@@ -509,7 +518,7 @@ class MainWindow(QMainWindow):
         widgets = [
             self.token_edit, self.repo_edit, self.branch_edit,
             self.show_token_btn, self.remember_cb, self.auto_refresh_cb,
-            self.refresh_btn, self.actions_btn, self.runs_table,
+            self.refresh_btn, self.actions_btn, self.push_btn, self.runs_table,
             self.open_run_btn, self.logs_btn, self.download_btn,
             self.port_combo, self.refresh_ports_btn, self.flash_btn,
             self.open_folder_btn,
@@ -523,6 +532,7 @@ class MainWindow(QMainWindow):
         run = self._current_run
         self.refresh_btn.setEnabled(True)
         self.actions_btn.setEnabled(True)
+        self.push_btn.setEnabled(True)
         self.token_edit.setEnabled(True)
         self.repo_edit.setEnabled(True)
         self.branch_edit.setEnabled(True)
@@ -728,6 +738,139 @@ class MainWindow(QMainWindow):
             f"分支 {run.head_branch or '—'}")
         self.detail_sha.setText(run.head_sha or "—")
         self.detail_sha.setToolTip(f"完整 SHA：{run.head_sha or '—'}")
+
+    # ================================================================
+    # Git 推送
+    # ================================================================
+
+    def _git_preflight(self) -> tuple[str, str, str, int] | None:
+        """读取当前分支、工作区状态和待推送提交数；失败时弹窗并返回 None。"""
+        try:
+            branch_result = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=8)
+            status_result = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "status", "--porcelain"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=8)
+            remote_result = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "remote", "get-url", "origin"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=8)
+        except FileNotFoundError:
+            QMessageBox.critical(self, "找不到 Git", "当前系统找不到 git 命令，请先安装 Git。")
+            return None
+        except subprocess.TimeoutExpired:
+            QMessageBox.critical(self, "Git 超时", "读取本地 Git 状态超时。")
+            return None
+
+        if branch_result.returncode != 0:
+            detail = (branch_result.stderr or branch_result.stdout).strip()
+            QMessageBox.critical(self, "不是 Git 仓库",
+                                 f"无法读取当前分支：\n{detail or '未知错误'}")
+            return None
+        if remote_result.returncode != 0:
+            QMessageBox.critical(self, "缺少 origin",
+                                 "当前仓库没有配置 origin 远程。")
+            return None
+
+        branch = branch_result.stdout.strip()
+        if not branch or branch == "HEAD":
+            QMessageBox.warning(self, "当前不是分支",
+                                "当前处于 detached HEAD 状态，请先切换到一个分支再推送。")
+            return None
+
+        lines = [line for line in status_result.stdout.splitlines() if line.strip()]
+        tracked = [line for line in lines if not line.startswith("??")]
+        untracked = len(lines) - len(tracked)
+        dirty_parts: list[str] = []
+        if tracked:
+            dirty_parts.append(f"{len(tracked)} 项已跟踪改动")
+        if untracked:
+            dirty_parts.append(f"{untracked} 项未跟踪文件")
+        dirty_text = "、".join(dirty_parts)
+
+        # 先按 upstream 算；没有 upstream 再和 origin/<branch> 比。
+        ahead = -1
+        for spec in ("@{u}..HEAD", f"origin/{branch}..HEAD"):
+            try:
+                result = subprocess.run(
+                    ["git", "-C", str(REPO_ROOT), "rev-list", "--count", spec],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=8)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+            if result.returncode == 0:
+                try:
+                    ahead = int(result.stdout.strip())
+                except ValueError:
+                    ahead = -1
+                break
+
+        remote = remote_result.stdout.strip()
+        return branch, dirty_text, remote, ahead
+
+    def _push_git(self) -> None:
+        if self._busy:
+            return
+        preflight = self._git_preflight()
+        if preflight is None:
+            return
+        branch, dirty_text, remote, ahead = preflight
+
+        if ahead == 0:
+            if dirty_text:
+                QMessageBox.information(
+                    self, "没有新提交可推送",
+                    f"本地分支与 origin 已同步，当前没有新的 commit。\n\n"
+                    f"工作区还有 {dirty_text}，这些内容不会被 git push 推送。\n"
+                    "请先在终端执行 git add/commit，或让协作方提交后再点推送。")
+            else:
+                QMessageBox.information(
+                    self, "没有新提交可推送",
+                    "本地分支与 origin 已同步，没有新的 commit。")
+            self._set_status("没有新提交可推送。", theme.WARN)
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("推送当前分支")
+        box.setIcon(QMessageBox.Question)
+        box.setText(f"将执行：git push origin {branch}")
+        info = (
+            f"本地仓库：{REPO_ROOT}\n"
+            f"远程地址：{remote}\n\n"
+            "只推送已经提交的内容，不会自动 add/commit。"
+        )
+        if ahead > 0:
+            info += f"\n待推送 commit：{ahead} 个"
+        if dirty_text:
+            info += f"\n\n工作区还有 {dirty_text}，不会本次推送。"
+        info += "\n\n推送需要本机 Git 凭据已配置好。"
+        box.setInformativeText(info)
+        push = box.addButton("推送", QMessageBox.AcceptRole)
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        if box.clickedButton() is not push:
+            return
+
+        worker = GitPushWorker(REPO_ROOT, branch)
+        self._append_log(f"开始推送本地分支 {branch} 到 origin ...", "accent")
+        self._start_task(worker, self._on_push_done, f"正在推送 {branch} ...")
+
+    def _on_push_done(self, data: dict) -> None:
+        error = data.get("error")
+        if error:
+            self._set_status(f"推送失败：{error}", theme.ERR)
+            QMessageBox.critical(self, "推送失败", error)
+            return
+
+        branch = data.get("branch") or "当前分支"
+        self._set_status(f"推送完成：{branch} -> origin", theme.OK)
+        QMessageBox.information(
+            self, "推送完成",
+            f"{branch} 已推送到 origin。\n新提交会触发 GitHub Actions 构建。")
 
     # ================================================================
     # 打开页面 / 日志
