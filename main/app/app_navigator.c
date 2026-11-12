@@ -51,6 +51,7 @@ static const app_page_ops_t s_page_ops[PAGE_MAX] = {
     [PAGE_SET_NET]   = {.build = ui_set_net_create},
     [PAGE_SET_NET_ADD] = {.build = ui_set_net_add_create},
     [PAGE_SET_TIME]  = {.build = ui_set_time_create},
+    [PAGE_SET_RECORD] = {.build = ui_set_record_create},
     [PAGE_SET_ALARM] = {.build = ui_set_alarm_create},
     [PAGE_SET_READ]  = {.build = ui_set_read_create},
     [PAGE_SET_MUSIC] = {.build = ui_set_music_create},

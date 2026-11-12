@@ -11,6 +11,7 @@ idf_component_register(
         "ui/ui_set_net.c"
         "ui/ui_set_net_add.c"
         "ui/ui_set_time.c"
+        "ui/ui_set_record.c"
         "ui/ui_set_alarm.c"
         "ui/ui_set_read.c"
         "ui/ui_set_music.c"

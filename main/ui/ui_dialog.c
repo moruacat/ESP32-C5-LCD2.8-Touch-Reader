@@ -169,6 +169,22 @@ static void add_btn_pair(lv_obj_t *box, lv_coord_t panel_w,
             right_text, right_cb, right_arg);
 }
 
+/* 危险动作按钮：红色实心 + 白字。取消按钮仍沿用原来的主色样式。 */
+static lv_obj_t *add_btn_danger(lv_obj_t *box, lv_align_t align,
+                                lv_coord_t x_ofs, lv_coord_t y_ofs,
+                                lv_coord_t w, const char *text,
+                                lv_event_cb_t cb, void *arg)
+{
+    lv_obj_t *btn = add_btn(box, align, x_ofs, y_ofs, w, false, text, cb, arg);
+    lv_obj_set_style_bg_color(btn, UI_COLOR_TEMP, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_t *lb = lv_obj_get_child(btn, 0);
+    if (lb != NULL) {
+        lv_obj_set_style_text_color(lb, lv_color_white(), 0);
+    }
+    return btn;
+}
+
 /* ===================== 确认对话框 ===================== */
 
 static void confirm_ok_cb(lv_event_t *e)
@@ -206,10 +222,15 @@ void ui_dialog_confirm(const char *title, const char *note, const char *ok_text,
     add_text(box, title, UI_COLOR_TEMP, 18, 1);
     add_text(box, note, UI_COLOR_TEXT_DIM, 46, 2);
 
-    /* 取消在右、主色实心：危险操作要让「取消」最好按 */
-    add_btn_pair(box, 244,
-                 ok_text ? ok_text : "确定", confirm_ok_cb, mask,
-                 "取消", close_cb, mask, true);
+    /* 取消仍在右侧、保持原来的主色；真正执行动作的按钮改成红色警示。 */
+    lv_coord_t w = (244 - 36) / 2;
+    if (w > 96) {
+        w = 96;
+    }
+    add_btn_danger(box, LV_ALIGN_BOTTOM_LEFT, 12, -12, w,
+                   ok_text ? ok_text : "确定", confirm_ok_cb, mask);
+    add_btn(box, LV_ALIGN_BOTTOM_RIGHT, -12, -12, w, true,
+            "取消", close_cb, mask);
 }
 
 /* ===================== 提示层 ===================== */

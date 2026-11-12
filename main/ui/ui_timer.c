@@ -2,6 +2,8 @@
 #include "ui_common.h"
 #include "app_navigator.h"
 #include "srv_timer.h"
+#include "ui_sleep.h"
+#include "bsp/esp32_c5_touch_lcd_2.8.h"
 
 #include <stdio.h>
 
@@ -13,6 +15,11 @@
 #define BTN_MAIN_X      112
 #define BTN_MAIN_W      200
 
+/* 标题栏右侧的 BOOT 启停开关（风格同单词页的查词/译按钮） */
+#define BOOT_TAB_W      92
+#define BOOT_TAB_H      20
+#define BOOT_TAB_X      (UI_SCREEN_W - BOOT_TAB_W - 8)
+
 /*! 刷新周期：百分秒显示，50ms 一跳（20Hz）。
  *  .hh 那两位本来就是每 10ms 才变一次，20Hz 时每次跳 5 个数，看着一样是连续跑动；
  *  但 48px 大字每帧都要重新排版 + 重绘，单核 C5 上省下的重绘量是实打实的。 */
@@ -20,6 +27,9 @@
 
 static lv_obj_t *s_time_lb;
 static lv_obj_t *s_main_lb;
+static lv_obj_t *s_boot_btn;
+static lv_obj_t *s_root;
+static bool      s_boot_ctl = false;   /*!< 运行时开关：是否允许 BOOT 键启停秒表 */
 
 static int64_t s_last_ms     = -1;
 static bool    s_last_active = false;
@@ -101,6 +111,70 @@ static lv_obj_t *make_btn(lv_obj_t *root, lv_coord_t x, lv_coord_t w,
     return lb;
 }
 
+/* ===================== BOOT 键启停开关 ===================== */
+
+static void boot_tab_refresh(void)
+{
+    if (s_boot_btn == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_color(s_boot_btn,
+                              s_boot_ctl ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE, 0);
+    lv_obj_t *lb = lv_obj_get_child(s_boot_btn, 0);
+    if (lb != NULL) {
+        lv_obj_set_style_text_color(lb,
+                                    s_boot_ctl ? lv_color_white() : UI_COLOR_TEXT_DIM, 0);
+        lv_label_set_text(lb, s_boot_ctl ? "BOOT启停 开" : "BOOT启停 关");
+    }
+}
+
+static void on_boot_ctl_toggle(lv_event_t *e)
+{
+    (void)e;
+    s_boot_ctl = !s_boot_ctl;
+    boot_tab_refresh();
+    /* 强制触摸唤醒只改运行时覆盖，不写 CFG_TOUCH_WAKE。 */
+    ui_sleep_set_force_touch_wake(s_boot_ctl, s_root);
+}
+
+static lv_obj_t *make_boot_tab(lv_obj_t *root)
+{
+    lv_obj_t *btn = lv_button_create(root);
+    lv_obj_set_size(btn, BOOT_TAB_W, BOOT_TAB_H);
+    lv_obj_set_pos(btn, BOOT_TAB_X, 4);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_style_bg_color(btn, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    ui_add_click_feedback(btn);
+    lv_obj_add_event_cb(btn, on_boot_ctl_toggle, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *lb = lv_label_create(btn);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(lb, UI_COLOR_TEXT_DIM, 0);
+    lv_label_set_text(lb, "BOOT启停 关");
+    lv_obj_center(lb);
+    return btn;
+}
+
+bool ui_timer_boot_control_enabled(void)
+{
+    return s_root != NULL && s_boot_ctl;
+}
+
+void ui_timer_boot_toggle(void)
+{
+    if (!ui_timer_boot_control_enabled()) {
+        return;
+    }
+    if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) != ESP_OK) {
+        return;
+    }
+    srv_timer_sw_toggle();
+    sw_update();
+    bsp_display_unlock();
+}
+
 /* 页面销毁时删掉刷新定时器（同 ui_clock：句柄走事件 user_data，
  * 不能用 static 存，否则新页面先建好时会被覆盖） */
 static void timer_root_del_cb(lv_event_t *e)
@@ -112,11 +186,21 @@ static void timer_root_del_cb(lv_event_t *e)
     if (t != NULL) {
         lv_timer_delete(t);
     }
+
+    if (lv_event_get_target(e) == s_root) {
+        ui_sleep_set_force_touch_wake(false, s_root);
+        s_root = NULL;
+        s_boot_btn = NULL;
+    }
 }
 
 void ui_timer_create(lv_obj_t *root)
 {
-    ui_titlebar_create(root, "计时器", app_navigator_back_cb, NULL);
+    s_root = root;
+    ui_titlebar_create_plain(root, "计时器", app_navigator_back_cb, NULL);
+    s_boot_btn = make_boot_tab(root);
+    boot_tab_refresh();
+    ui_sleep_set_force_touch_wake(s_boot_ctl, s_root);
 
     s_time_lb = lv_label_create(root);
     lv_obj_set_style_text_color(s_time_lb, UI_COLOR_TEXT, 0);

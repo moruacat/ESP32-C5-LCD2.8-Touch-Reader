@@ -16,6 +16,7 @@ typedef enum {
     PAGE_SET_NET,       /*!< 设置->网络 */
     PAGE_SET_NET_ADD,   /*!< 设置->网络->添加网络 */
     PAGE_SET_TIME,      /*!< 设置->时间 */
+    PAGE_SET_RECORD,    /*!< 设置->记录 */
     PAGE_SET_ALARM,     /*!< 设置->闹钟 */
     PAGE_SET_READ,      /*!< 设置->阅读 */
     PAGE_SET_MUSIC,     /*!< 设置->音乐 */

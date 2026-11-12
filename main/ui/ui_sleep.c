@@ -8,6 +8,8 @@
 #include "srv_player.h"
 #include "srv_radio.h"
 #include "srv_recorder.h"
+#include "ui_timer.h"
+#include "ui_countdown.h"
 
 #include "bsp/esp32_c5_touch_lcd_2.8.h"
 #include "esp_log.h"
@@ -27,6 +29,8 @@ static bool      s_on    = false;
 static int64_t   s_last_act_us = 0;
 static bool      s_dimmed      = false;
 static bool      s_locked      = false;     /*!< 本次闲置是否已经锁过屏 */
+static bool      s_force_touch_wake = false; /*!< 运行时强制触摸唤醒；不写配置 */
+static const void *s_force_touch_wake_owner = NULL;
 
 bool ui_sleep_is_on(void)
 {
@@ -163,11 +167,28 @@ static void dim_restore(void)
  * 必须走触摸事件，不能在定时器里轮询 PRESSED 状态：快速点一下或滑一下
  * 只有几十毫秒，300ms 的轮询很可能一次都抓不到，于是亮度一直暗着回不来。
  */
+static bool touch_wake_enabled(void)
+{
+    return s_force_touch_wake || srv_config_get_int(CFG_TOUCH_WAKE, 1) != 0;
+}
+
+void ui_sleep_set_force_touch_wake(bool on, const void *owner)
+{
+    if (on) {
+        s_force_touch_wake = true;
+        s_force_touch_wake_owner = owner;
+    } else if (owner == NULL || owner == s_force_touch_wake_owner) {
+        s_force_touch_wake = false;
+        s_force_touch_wake_owner = NULL;
+    }
+}
+
 static void on_indev_activity(lv_event_t *e)
 {
     (void)e;
-    /* 休眠中且关了「触摸唤醒」：只当没碰，不续期、不恢复亮度、不解锁 */
-    if (s_on && srv_config_get_int(CFG_TOUCH_WAKE, 1) == 0) {
+    /* 休眠中且关了「触摸唤醒」：只当没碰，不续期、不恢复亮度、不解锁。
+     * 计时器/倒计时打开了 BOOT 启停时，force 标志会临时接管这里。 */
+    if (s_on && !touch_wake_enabled()) {
         return;
     }
     s_last_act_us = esp_timer_get_time();
@@ -253,7 +274,7 @@ void ui_sleep_set(bool on)
 static void on_layer_click(lv_event_t *e)
 {
     (void)e;
-    if (srv_config_get_int(CFG_TOUCH_WAKE, 1) == 0) {
+    if (!touch_wake_enabled()) {
         return;
     }
     ui_sleep_set(false);
@@ -262,7 +283,6 @@ static void on_layer_click(lv_event_t *e)
 /* 跑在 srv_input 的轮询任务上下文：不能直接碰 LVGL，ui_sleep_set 内部会加锁 */
 static void on_boot_key(srv_input_evt_t evt, void *arg)
 {
-    (void)evt;
     (void)arg;
 
     /* 响铃时 BOOT 键优先停铃，别把屏幕关了听闹钟 */
@@ -270,6 +290,22 @@ static void on_boot_key(srv_input_evt_t evt, void *arg)
         if (srv_alarm_is_ringing(i)) {
             srv_alarm_stop(i);
             ESP_LOGI(TAG, "BOOT 键停止闹钟 %d", i);
+            return;
+        }
+    }
+
+    /* 计时器 / 倒计时页打开了 BOOT 启停时，短按交给对应页面处理。
+     * 这些页面同时会设置运行时触摸唤醒覆盖，所以屏幕仍可用触摸唤醒。 */
+    if (evt == SRV_INPUT_EVT_SHORT_PRESS || evt == SRV_INPUT_EVT_DOUBLE_CLICK) {
+        app_page_id_t page = app_navigator_current();
+        if (page == PAGE_TIMER && ui_timer_boot_control_enabled()) {
+            s_last_act_us = esp_timer_get_time();
+            ui_timer_boot_toggle();
+            return;
+        }
+        if (page == PAGE_COUNTDOWN && ui_countdown_boot_control_enabled()) {
+            s_last_act_us = esp_timer_get_time();
+            ui_countdown_boot_toggle();
             return;
         }
     }
@@ -296,6 +332,8 @@ void ui_sleep_init(void)
     s_on = false;
     s_dimmed = false;
     s_locked = false;
+    s_force_touch_wake = false;
+    s_force_touch_wake_owner = NULL;
     s_last_act_us = esp_timer_get_time();
 
     /* BOOT 键统一在这里处理（srv_input 是单回调槽，闹钟那边不再抢） */

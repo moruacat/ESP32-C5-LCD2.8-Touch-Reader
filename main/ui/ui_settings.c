@@ -32,7 +32,7 @@ typedef struct {
 static const set_item_t s_items[] = {
     {"网络", &ic_wifi,      SET_DETAIL, NULL, PAGE_SET_NET, false},
     {"时间", &ic_ntp,       SET_DETAIL, NULL, PAGE_SET_TIME, false},
-    {"记录", &ic_page,      SET_TOGGLE, CFG_TEMP_REC_EN, PAGE_MAX, false},   /* 温湿度记录：开关存配置 */
+    {"记录", &ic_page,      SET_DETAIL, NULL, PAGE_SET_RECORD, false},      /* 记录二级页 */
     {"闹钟", &ic_timer,     SET_DETAIL, NULL, PAGE_SET_ALARM, false},
     {"阅读", &ic_book_open, SET_DETAIL, NULL, PAGE_SET_READ, true},
     {"音乐", &ic_music,     SET_DETAIL, NULL, PAGE_SET_MUSIC, true},

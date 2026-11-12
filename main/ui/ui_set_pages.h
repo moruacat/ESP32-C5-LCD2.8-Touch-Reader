@@ -14,6 +14,7 @@ extern "C" {
 void ui_set_net_create(lv_obj_t *root);      /*!< 网络 */
 void ui_set_net_add_create(lv_obj_t *root);  /*!< 网络->添加网络 */
 void ui_set_time_create(lv_obj_t *root);     /*!< 时间 */
+void ui_set_record_create(lv_obj_t *root);   /*!< 记录 */
 void ui_set_alarm_create(lv_obj_t *root);    /*!< 闹钟 */
 void ui_set_read_create(lv_obj_t *root);     /*!< 阅读 */
 void ui_set_music_create(lv_obj_t *root);    /*!< 音乐 */
