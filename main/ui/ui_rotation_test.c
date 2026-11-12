@@ -114,7 +114,7 @@ static void test_refresh_layout(void)
     lv_obj_set_size(s_btn_row, w - 16, 36);
     lv_obj_align(s_btn_row, LV_ALIGN_BOTTOM_MID, 0, -10);
 
-    char buf[96];
+    char buf[160];
     snprintf(buf, sizeof(buf), "旋转测试\n当前 %d°\n逻辑分辨率 %d × %d\n下方按钮应可正常点击",
              angle, w, h);
     lv_label_set_text(s_hint, buf);
