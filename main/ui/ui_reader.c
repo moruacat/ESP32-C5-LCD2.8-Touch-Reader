@@ -23,8 +23,8 @@ static const char *TAG = "ui_reader";
 #define RD_BOTTOM_H   18                    /*!< 底部页码栏高度 */
 
 /* 正文可用区域 */
-#define PAGE_TEXT_W   (UI_SCREEN_W - RD_MARGIN * 2)
-#define PAGE_TEXT_H   (UI_SCREEN_H - UI_TITLEBAR_H - RD_BOTTOM_H - 8)
+#define PAGE_TEXT_W   (ui_scr_w() - RD_MARGIN * 2)
+#define PAGE_TEXT_H   (ui_scr_h() - UI_TITLEBAR_H - RD_BOTTOM_H - 8)
 
 #define SCAN_CHARS    600                   /*!< 每次多读一点，保证够排满一页 */
 #define SCAN_BYTES    (SCAN_CHARS * 4 + 8)  /*!< 最坏每字符 4 字节 */
@@ -479,7 +479,7 @@ static void turn_prev(void)
 #define AUTO_LINE_H     2
 #define AUTO_TICK_MS    100
 #define AUTO_LINE_TOP   (UI_TITLEBAR_H + 4)
-#define AUTO_LINE_BOT   (UI_SCREEN_H - RD_BOTTOM_H - 4)
+#define AUTO_LINE_BOT   (ui_scr_h() - RD_BOTTOM_H - 4)
 #define AUTO_SEC_DEF    15
 #define AUTO_SEC_MIN    5
 #define AUTO_SEC_MAX    600
@@ -610,6 +610,7 @@ enum {
     ACT_GOTO,
     ACT_AUTO,
     ACT_AUTO_SEC,
+    ACT_ROTATE,
 };
 
 static int s_menu_act[UI_MENU_MAX_ITEMS];
@@ -713,6 +714,15 @@ static void on_menu_pick(int idx, void *arg)
     case ACT_AUTO_SEC:
         auto_sec_show();
         break;
+    case ACT_ROTATE:
+        s_auto_hold = false;
+        /* 重建页面会重新走「恢复上次位置」；先把当前阅读位置强制落盘，
+         * 否则会跳回上一次节流保存的那一页。 */
+        if (srv_reader_is_open()) {
+            srv_reader_save_progress_force();
+        }
+        app_navigator_toggle_page_rotation();
+        break;
     default:
         break;
     }
@@ -768,8 +778,12 @@ static void on_reader_long(lv_event_t *e)
     items[n].icon = &ic_timer;
     s_menu_act[n++] = ACT_AUTO_SEC;
 
+    items[n].text = "旋转屏幕";
+    items[n].icon = &ic_setting;
+    s_menu_act[n++] = ACT_ROTATE;
+
     /* 菜单弹出期间先挂起自动翻页，避免菜单还开着页面自己翻走。
-     * 阅读器菜单最多 5 项，用两列排，按钮不再被压成细条。 */
+     * 阅读器菜单最多 6 项，用两列排，按钮不会被压成细条。 */
     auto_suspend();
     ui_menu_show_2col(s_book_name, items, n, on_menu_pick, NULL);
 }
@@ -781,7 +795,7 @@ static void on_reader_long(lv_event_t *e)
 /*! 位移在这个范围内才算「轻点」而不是「滑动」 */
 #define RD_TAP_MAX    20
 /*! 左右两侧多宽算「上一页 / 下一页」点击区 */
-#define RD_BAND_W     (UI_SCREEN_W / 3)
+#define RD_BAND_W     (ui_scr_w() / 3)
 
 static lv_point_t s_slide_start;
 static bool       s_pressed;
@@ -849,7 +863,7 @@ static void reader_released_cb(lv_event_t *e)
     if (abs(dx) < RD_TAP_MAX && abs(dy) < RD_TAP_MAX) {
         if (s_slide_start.x < RD_BAND_W) {
             turn_prev();
-        } else if (s_slide_start.x > UI_SCREEN_W - RD_BAND_W) {
+        } else if (s_slide_start.x > ui_scr_w() - RD_BAND_W) {
             turn_next();
         }
     }
@@ -862,6 +876,10 @@ static void reader_released_cb(lv_event_t *e)
 #define GOTO_LIST_W     168
 #define GOTO_LIST_H     172
 #define GOTO_KEY_GAP    4
+
+/* 竖屏时列表/键盘会重新排布，不能再写死横屏尺寸。 */
+static lv_coord_t s_goto_list_w = GOTO_LIST_W;
+static lv_coord_t s_goto_list_h = GOTO_LIST_H;
 /*! 键盘能输几位数字：章数不设上限，所以位数在开弹层时按实际章数算 */
 #define GOTO_DIGITS_MAX 10
 #define GOTO_DIGITS_BUF (GOTO_DIGITS_MAX + 1)
@@ -1024,7 +1042,7 @@ static void goto_scroll_to_sel(void)
     if (s_goto_list == NULL) {
         return;
     }
-    int vis = GOTO_LIST_H / GOTO_ROW_H;     /* 一屏几行 */
+    int vis = s_goto_list_h / GOTO_ROW_H;   /* 一屏几行 */
     int32_t top = (int32_t)s_goto_sel - vis / 2;
     if (top < 0) {
         top = 0;
@@ -1282,7 +1300,7 @@ static bool goto_build_chapters(lv_obj_t *box)
     lv_obj_t *list = lv_obj_create(box);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLLABLE);   /* 滚动自己管，不用 LVGL 那套 */
     lv_obj_add_flag(list, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(list, GOTO_LIST_W, GOTO_LIST_H);
+    lv_obj_set_size(list, s_goto_list_w, s_goto_list_h);
     lv_obj_set_pos(list, 8, 36);
     lv_obj_set_style_bg_color(list, UI_COLOR_BG, 0);
     lv_obj_set_style_border_width(list, 0, 0);
@@ -1307,7 +1325,7 @@ static bool goto_build_chapters(lv_obj_t *box)
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);  /* 按压落到容器上 */
-        lv_obj_set_size(row, GOTO_LIST_W, GOTO_ROW_H);
+        lv_obj_set_size(row, s_goto_list_w, GOTO_ROW_H);
         lv_obj_set_pos(row, 0, (lv_coord_t)(i * GOTO_ROW_H));
         lv_obj_set_style_bg_color(row, UI_COLOR_PRIMARY, 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
@@ -1322,7 +1340,7 @@ static bool goto_build_chapters(lv_obj_t *box)
         /* 长章名循环滚动看全称（行高只有一行，折行会压到下一行） */
         lv_label_set_long_mode(lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
         lv_obj_set_style_anim_duration(lb, 6000, 0);
-        lv_obj_set_width(lb, GOTO_LIST_W - 12);
+        lv_obj_set_width(lb, s_goto_list_w - 12);
         lv_obj_set_height(lb, font_ui_14.line_height);
         lv_label_set_text(lb, "");
         lv_obj_align(lb, LV_ALIGN_LEFT_MID, 0, 0);
@@ -1333,7 +1351,7 @@ static bool goto_build_chapters(lv_obj_t *box)
     }
 
     /* 偏移上限：滚到底时最后一行刚好吃满列表底边 */
-    s_goto_pos_max = cnt * GOTO_ROW_H - GOTO_LIST_H;
+    s_goto_pos_max = cnt * GOTO_ROW_H - s_goto_list_h;
     if (s_goto_pos_max < 0) {
         s_goto_pos_max = 0;
     }
@@ -1358,7 +1376,7 @@ static void goto_show(void)
     lv_obj_t *mask = lv_obj_create(scr);
     lv_obj_remove_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(mask, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(mask, ui_scr_w(), ui_scr_h());
     lv_obj_set_pos(mask, 0, 0);
     lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(mask, LV_OPA_60, 0);
@@ -1372,9 +1390,13 @@ static void goto_show(void)
     lv_obj_add_event_cb(mask, goto_del_cb, LV_EVENT_DELETE, NULL);
     lv_obj_add_event_cb(mask, goto_cancel_cb, LV_EVENT_CLICKED, NULL);   /* 点空白 = 取消 */
 
+    const bool portrait = ui_scr_w() < ui_scr_h();
+    const lv_coord_t panel_w = portrait ? (ui_scr_w() - 8) : GOTO_PANEL_W;
+    const lv_coord_t panel_h = portrait ? (ui_scr_h() - 8) : GOTO_PANEL_H;
+
     lv_obj_t *box = lv_obj_create(mask);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(box, GOTO_PANEL_W, GOTO_PANEL_H);
+    lv_obj_set_size(box, panel_w, panel_h);
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_border_width(box, 0, 0);
@@ -1385,13 +1407,13 @@ static void goto_show(void)
     s_goto_input = lv_label_create(box);
     lv_obj_set_style_text_font(s_goto_input, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_goto_input, UI_COLOR_TEXT, 0);
-    lv_obj_set_width(s_goto_input, 200);
+    lv_obj_set_width(s_goto_input, panel_w - 84);
     lv_obj_set_pos(s_goto_input, 12, 8);
     lv_label_set_text(s_goto_input, "");
 
     lv_obj_t *cancel = lv_button_create(box);
     lv_obj_set_size(cancel, 52, 24);
-    lv_obj_set_pos(cancel, GOTO_PANEL_W - 60, 5);
+    lv_obj_set_pos(cancel, panel_w - 60, 5);
     lv_obj_set_style_radius(cancel, 6, 0);
     lv_obj_set_style_bg_color(cancel, UI_COLOR_BG, 0);
     lv_obj_set_style_shadow_width(cancel, 0, 0);
@@ -1406,11 +1428,6 @@ static void goto_show(void)
     lv_obj_center(clb);
 
     if (srv_reader_format() == READER_FMT_EBF) {
-        if (!goto_build_chapters(box)) {
-            goto_close();
-            ui_alert_show("章节列表打不开", UI_COLOR_WARN, "内存不足", "知道了", NULL, NULL, 1800);
-            return;
-        }
         /* 键盘允许输入的位数跟着章数走：章数不设上限，写死 4 位的话
          * 一万章以上的书就没法用键盘输章节号了 */
         s_goto_input_max = dec_digits(srv_reader_chapter_count());
@@ -1419,12 +1436,45 @@ static void goto_show(void)
         } else if (s_goto_input_max > GOTO_DIGITS_MAX) {
             s_goto_input_max = GOTO_DIGITS_MAX;
         }
-        goto_build_keypad(box, 182, 36, 34, 40);
+        if (portrait) {
+            const lv_coord_t kh = 34;
+            const lv_coord_t keypad_h = 4 * kh + 3 * GOTO_KEY_GAP;
+            const lv_coord_t kw = (panel_w - 16 - 2 * GOTO_KEY_GAP) / 3;
+            s_goto_list_w = panel_w - 16;
+            s_goto_list_h = panel_h - 36 - keypad_h - 16;
+            if (s_goto_list_h < GOTO_ROW_H * 3) {
+                s_goto_list_h = GOTO_ROW_H * 3;
+            }
+            if (!goto_build_chapters(box)) {
+                goto_close();
+                ui_alert_show("章节列表打不开", UI_COLOR_WARN, "内存不足", "知道了", NULL, NULL, 1800);
+                return;
+            }
+            goto_build_keypad(box, 8, 36 + s_goto_list_h + 8, kw, kh);
+        } else {
+            s_goto_list_w = GOTO_LIST_W;
+            s_goto_list_h = GOTO_LIST_H;
+            if (!goto_build_chapters(box)) {
+                goto_close();
+                ui_alert_show("章节列表打不开", UI_COLOR_WARN, "内存不足", "知道了", NULL, NULL, 1800);
+                return;
+            }
+            goto_build_keypad(box, 182, 36, 34, 40);
+        }
     } else {
         /* TXT 只有页码，键盘放大居中，按起来宽敞些。
          * 页表本身有 PAGE_MAX 上限，页码 4 位（9999）已经远超能翻到的范围 */
         s_goto_input_max = 4;
-        goto_build_keypad(box, 80, 64, 44, 34);
+        if (portrait) {
+            const lv_coord_t kw = (panel_w - 24 - 2 * GOTO_KEY_GAP) / 3;
+            const lv_coord_t kh = 44;
+            const lv_coord_t keypad_w = 3 * kw + 2 * GOTO_KEY_GAP;
+            const lv_coord_t keypad_h = 4 * kh + 3 * GOTO_KEY_GAP;
+            goto_build_keypad(box, (panel_w - keypad_w) / 2,
+                              (panel_h - keypad_h) / 2 + 18, kw, kh);
+        } else {
+            goto_build_keypad(box, 80, 64, 44, 34);
+        }
     }
 
     goto_input_refresh();
@@ -1445,7 +1495,15 @@ static void reader_enter(lv_obj_t *root);
  */
 static void reader_titlebar_ensure(lv_obj_t *root, const char *title)
 {
-    if (s_titlebar == NULL) {
+    /* 原地旋转会先建新 root、再异步删旧 root。旧标题栏还活着不代表
+     * 新页面已经有标题栏，所以必须按 parent 判断，否则新页面会没有返回键。 */
+    if (s_titlebar != NULL && lv_obj_is_valid(s_titlebar) &&
+            lv_obj_get_parent(s_titlebar) == root) {
+        return;
+    }
+
+    if (s_titlebar == NULL || !lv_obj_is_valid(s_titlebar) ||
+            lv_obj_get_parent(s_titlebar) != root) {
         s_titlebar = ui_titlebar_create(root, title, app_navigator_back_cb, NULL);
         /* 阅读器的章名/书名不滚动：正文就在下面，标题一直动会分心 */
         ui_titlebar_set_scroll(s_titlebar, false);
@@ -1533,7 +1591,7 @@ static void wait_layer_create(lv_obj_t *root, const char *title, int pct)
 
     s_wait_layer = lv_obj_create(root);
     lv_obj_remove_flag(s_wait_layer, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_wait_layer, UI_SCREEN_W, UI_SCREEN_H - UI_TITLEBAR_H);
+    lv_obj_set_size(s_wait_layer, ui_scr_w(), ui_scr_h() - UI_TITLEBAR_H);
     lv_obj_set_pos(s_wait_layer, 0, UI_TITLEBAR_H);
     lv_obj_set_style_bg_color(s_wait_layer, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_wait_layer, LV_OPA_COVER, 0);
@@ -1816,7 +1874,7 @@ static void reader_build_content(lv_obj_t *root)
     text_style_apply(s_measure);
     lv_obj_set_width(s_measure, PAGE_TEXT_W);
     lv_label_set_long_mode(s_measure, LV_LABEL_LONG_WRAP);
-    lv_obj_set_pos(s_measure, 0, UI_SCREEN_H + 20);
+    lv_obj_set_pos(s_measure, 0, ui_scr_h() + 20);
 
     /* 底部：页码 + 进度 */
     s_info_lb = lv_label_create(root);

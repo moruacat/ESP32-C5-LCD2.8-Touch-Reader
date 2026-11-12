@@ -1108,8 +1108,8 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg)
 
 /* ===================== 操作菜单 ===================== */
 
-/* 普通单列菜单沿用紧凑行高，5 项仍能放进 240 高屏幕；
- * 阅读器那种 5 项长按菜单改用下面的 ui_menu_show_2col()，不再压扁按钮。 */
+/* 普通单列菜单沿用紧凑行高，最多 6 项；
+ * 阅读器这种长按菜单改用下面的 ui_menu_show_2col()，不再压扁按钮。 */
 #define MENU_PANEL_W   ((ui_scr_w() > 276) ? 268 : (ui_scr_w() - 8))
 #define MENU_TITLE_H   28
 #define MENU_ITEM_H    30

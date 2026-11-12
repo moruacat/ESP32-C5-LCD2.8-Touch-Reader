@@ -155,7 +155,7 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg);
 /* ===================== 操作菜单 ===================== */
 
 /*! 菜单最多几项（不含自动追加的「取消」） */
-#define UI_MENU_MAX_ITEMS  5
+#define UI_MENU_MAX_ITEMS  6
 
 /**
  * @brief 菜单项
@@ -182,10 +182,10 @@ void ui_menu_show(const char *title, const ui_menu_item_t *items, int count,
                   ui_menu_cb_t cb, void *arg);
 
 /**
- * @brief 弹出两列操作菜单（阅读器这种 5 项菜单用，避免把行高压扁）
+ * @brief 弹出两列操作菜单（阅读器这种多选菜单用，避免把行高压扁）
  *
- * 原项按两列排，最后一行是横跨两列的「取消」。面板最大高度仍控制在
- * 320x240 屏幕内，图标和文字都有正常手指点击面积。
+ * 原项按两列排，最后一行是横跨两列的「取消」。面板宽度和高度会按
+ * 当前横竖屏自动收紧，图标和文字都保留正常手指点击面积。
  */
 void ui_menu_show_2col(const char *title, const ui_menu_item_t *items, int count,
                        ui_menu_cb_t cb, void *arg);

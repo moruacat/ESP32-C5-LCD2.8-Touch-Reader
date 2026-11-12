@@ -140,7 +140,7 @@ static lv_obj_t *page_build(app_page_id_t page)
 
 static bool page_can_rotate(app_page_id_t page)
 {
-    return page == PAGE_BOOKSHELF || page == PAGE_MUSIC;
+    return page == PAGE_BOOKSHELF || page == PAGE_MUSIC || page == PAGE_READER;
 }
 
 /* 创建并切换页面（调用前必须已持有 LVGL 锁）。
@@ -266,7 +266,7 @@ void app_navigator_toggle_page_rotation(void)
         return;
     }
 
-    uint16_t next = (bsp_display_get_rotation() == 0) ? 90 : 0;
+    uint16_t next = (bsp_display_get_rotation() == 0) ? 270 : 0;
     esp_err_t ret = bsp_display_set_rotation(next);
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "页面 %d 旋转到 %u°", (int)s_current, (unsigned)next);
