@@ -43,6 +43,8 @@ typedef struct {
     int32_t ntp_en;                                     /*!< NTP 开关 0/1 */
     int32_t ntp_tz;                                     /*!< 时区（小时，-12~+14） */
     int32_t ntp_fine;                                   /*!< 秒级微调偏移（-60~+60 秒） */
+    int32_t ntp_daily;                                  /*!< 每日自动偏移（秒/天，-60~+60） */
+    int32_t ntp_daily_day;                              /*!< 上次应用每日偏移的本地日期（1970-01-01 起天数） */
 
     /* 闹钟 */
     int32_t alarm_volume;                               /*!< 闹钟音量 0-100 */
@@ -94,6 +96,8 @@ typedef struct {
 #define CFG_NTP_EN          "ntp_en"
 #define CFG_NTP_TZ          "ntp_tz"
 #define CFG_NTP_FINE        "ntp_fine"
+#define CFG_NTP_DAILY       "ntp_daily"     /*!< 每日自动偏移（秒/天） */
+#define CFG_NTP_DAILY_DAY   "ntp_daily_day" /*!< 上次应用每日偏移的本地日期序号 */
 #define CFG_ALARM_VOLUME    "alarm_volume"
 #define CFG_READ_FONT_SIZE  "read_font_size"
 #define CFG_READ_LETTER_SP  "read_letter_space"
@@ -138,6 +142,8 @@ typedef struct {
 #define CFG_DEF_NTP_TZ          8
 /*! 默认秒级微调（秒） */
 #define CFG_DEF_NTP_FINE        0
+/*! 默认每日自动偏移（秒/天） */
+#define CFG_DEF_NTP_DAILY       0
 /*! 默认闹钟音量：与全局音量分开，免得半夜闹钟太响 */
 #define CFG_DEF_ALARM_VOLUME    80
 /*! 电池修正系数默认值（千分比）：1000 = 按板上 3:1 分压原样换算 */

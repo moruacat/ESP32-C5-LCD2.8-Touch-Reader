@@ -5,6 +5,7 @@
 #include "srv_config.h"
 #include "srv_player.h"
 #include "srv_rtc.h"
+#include "srv_ntp.h"
 #include "srv_safe.h"
 #include "srv_sd.h"
 #include "srv_wifi.h"
@@ -122,6 +123,8 @@ static esp_mcp_value_t tool_set_time(const esp_mcp_property_list_t *properties)
     if (srv_rtc_set_time(&t) != ESP_OK) {
         return esp_mcp_value_create_bool(false);
     }
+    /* AI 手动设置的是新的当前时间，重置每日偏移基准，避免跨天重复补正。 */
+    srv_ntp_daily_reset_anchor();
     ESP_LOGI(TAG, "AI 设置时间 %02d:%02d", hour, min);
     return esp_mcp_value_create_bool(true);
 }
