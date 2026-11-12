@@ -3,6 +3,7 @@
 #include "ui_dialog.h"
 #include "app_navigator.h"
 #include "srv_timer.h"
+#include "ui_sleep.h"
 #include "bsp/esp32_c5_touch_lcd_2.8.h"
 
 #include "esp_log.h"
@@ -28,6 +29,10 @@ static const char *TAG = "ui_countdown";
 #define BTN_SOUND_X     210
 #define BTN_SOUND_W     96
 
+#define BOOT_TAB_W      92
+#define BOOT_TAB_H      20
+#define BOOT_TAB_X      (UI_SCREEN_W - BOOT_TAB_W - 8)
+
 #define TICK_MS         100
 #define ALERT_CLOSE_MS  8000    /*!< 到点提示层自动消失时间 */
 
@@ -37,6 +42,9 @@ static lv_obj_t *s_big_lb;                  /*!< 运行态剩余时间 */
 static lv_obj_t *s_sub_lb;                  /*!< 运行态状态文字 */
 static lv_obj_t *s_main_lb;                 /*!< 主按钮文字 */
 static lv_obj_t *s_sound_lb;                /*!< 提示音按钮文字 */
+static lv_obj_t *s_boot_btn;
+static lv_obj_t *s_root;
+static bool      s_boot_ctl = false;        /*!< 运行时开关：是否允许 BOOT 键启停倒计时 */
 
 static bool s_setup_form = true;            /*!< 当前是「设定」还是「运行」形态 */
 
@@ -227,6 +235,75 @@ static void on_sound(lv_event_t *e)
     cd_sound_refresh();
 }
 
+/* ===================== BOOT 键启停开关 ===================== */
+
+static void boot_tab_refresh(void)
+{
+    if (s_boot_btn == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_color(s_boot_btn,
+                              s_boot_ctl ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE, 0);
+    lv_obj_t *lb = lv_obj_get_child(s_boot_btn, 0);
+    if (lb != NULL) {
+        lv_obj_set_style_text_color(lb,
+                                    s_boot_ctl ? lv_color_white() : UI_COLOR_TEXT_DIM, 0);
+        lv_label_set_text(lb, s_boot_ctl ? "BOOT启停 开" : "BOOT启停 关");
+    }
+}
+
+static void on_boot_ctl_toggle(lv_event_t *e)
+{
+    (void)e;
+    s_boot_ctl = !s_boot_ctl;
+    boot_tab_refresh();
+    ui_sleep_set_force_touch_wake(s_boot_ctl, s_root);
+}
+
+static lv_obj_t *make_boot_tab(lv_obj_t *root)
+{
+    lv_obj_t *btn = lv_button_create(root);
+    lv_obj_set_size(btn, BOOT_TAB_W, BOOT_TAB_H);
+    lv_obj_set_pos(btn, BOOT_TAB_X, 4);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_style_bg_color(btn, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    ui_add_click_feedback(btn);
+    lv_obj_add_event_cb(btn, on_boot_ctl_toggle, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *lb = lv_label_create(btn);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(lb, UI_COLOR_TEXT_DIM, 0);
+    lv_label_set_text(lb, "BOOT启停 关");
+    lv_obj_center(lb);
+    return btn;
+}
+
+bool ui_countdown_boot_control_enabled(void)
+{
+    return s_root != NULL && s_boot_ctl;
+}
+
+void ui_countdown_boot_toggle(void)
+{
+    if (!ui_countdown_boot_control_enabled()) {
+        return;
+    }
+    if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) != ESP_OK) {
+        return;
+    }
+
+    if (!srv_timer_cd_is_active() && !srv_timer_cd_is_finished()) {
+        srv_timer_cd_set_hms((int)lv_roller_get_selected(s_roller_h),
+                             (int)lv_roller_get_selected(s_roller_m),
+                             (int)lv_roller_get_selected(s_roller_s));
+    }
+    srv_timer_cd_toggle();
+    cd_refresh();
+    bsp_display_unlock();
+}
+
 static void cd_root_del_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_DELETE) {
@@ -236,11 +313,21 @@ static void cd_root_del_cb(lv_event_t *e)
     if (t != NULL) {
         lv_timer_delete(t);
     }
+
+    if (lv_event_get_target(e) == s_root) {
+        ui_sleep_set_force_touch_wake(false, s_root);
+        s_root = NULL;
+        s_boot_btn = NULL;
+    }
 }
 
 void ui_countdown_create(lv_obj_t *root)
 {
-    ui_titlebar_create(root, "倒计时", app_navigator_back_cb, NULL);
+    s_root = root;
+    ui_titlebar_create_plain(root, "倒计时", app_navigator_back_cb, NULL);
+    s_boot_btn = make_boot_tab(root);
+    boot_tab_refresh();
+    ui_sleep_set_force_touch_wake(s_boot_ctl, s_root);
 
     /* 到点提示由本页负责：谁启动倒计时谁就得把提示层准备好。
      * 回调是文件内静态函数，页面销毁后指针仍然有效，切到别的页面也能弹。 */

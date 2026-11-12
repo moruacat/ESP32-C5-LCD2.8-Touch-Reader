@@ -136,28 +136,35 @@ void ui_set_about_create(lv_obj_t *root)
     lv_obj_t *list = ui_settings_list_create(root);
 
     /* 只有「安全菜单 → 完整版设置 → 关于」这条路才显示安全模式开关，
-     * 普通设置的关于页保持隐藏（安全模式入口不应该随便露出来） */
-    const bool show_safe = (app_navigator_prev() == PAGE_SETTINGS_FULL);
+     * 普通设置的关于页保持隐藏（安全模式入口不应该随便露出来）。 */
+    const bool full = (app_navigator_prev() == PAGE_SETTINGS_FULL);
+    const bool show_safe = full;
+    /* 普通设置在安全模式开启时不再露出「快速返回主页」；
+     * 完整版设置仍保持完整。 */
+    const bool show_fast_home = full || !srv_safe_on();
 
-    lv_obj_t *row = ui_row_create(list, UI_ROW_Y(0), &ic_SD, "SD 卡");
+    int next = 0;
+    lv_obj_t *row = ui_row_create(list, UI_ROW_Y(next++), &ic_SD, "SD 卡");
     s_sd_lb = ui_row_value_create(row, -12, 90);
 
-    row = ui_row_create(list, UI_ROW_Y(1), &ic_info, "设备名");
+    row = ui_row_create(list, UI_ROW_Y(next++), &ic_info, "设备名");
     lv_obj_t *dev = ui_row_value_create(row, -12, 160);
     lv_obj_set_style_text_color(dev, UI_COLOR_TEXT_DIM, 0);
     lv_label_set_text(dev, esp_app_get_description()->project_name);
 
-    row = ui_row_create(list, UI_ROW_Y(2), NULL, "弹出 SD 卡");
+    row = ui_row_create(list, UI_ROW_Y(next++), NULL, "弹出 SD 卡");
     s_pop_lb = ui_row_btn_create(row, -8, 64, "弹出", on_pop_click, NULL);
 
-    row = ui_row_create(list, UI_ROW_Y(3), NULL, "重载 SD 卡");
+    row = ui_row_create(list, UI_ROW_Y(next++), NULL, "重载 SD 卡");
     ui_row_btn_create(row, -8, 64, "重载", on_remount_click, NULL);
 
-    row = ui_row_create(list, UI_ROW_Y(4), &ic_home, "快速返回主页");
-    (void)ui_row_switch_create(row, srv_config_get_int(CFG_FAST_HOME, CFG_DEF_FAST_HOME) != 0,
-                              on_fast_home_switch, NULL);
+    if (show_fast_home) {
+        row = ui_row_create(list, UI_ROW_Y(next++), &ic_home, "快速返回主页");
+        (void)ui_row_switch_create(row,
+                                  srv_config_get_int(CFG_FAST_HOME, CFG_DEF_FAST_HOME) != 0,
+                                  on_fast_home_switch, NULL);
+    }
 
-    int next = 5;
     if (show_safe) {
         row = ui_row_create(list, UI_ROW_Y(next++), &ic_warning, "安全模式");
         (void)ui_row_switch_create(row, srv_safe_on(), on_safe_switch, NULL);
