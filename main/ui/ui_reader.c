@@ -299,6 +299,9 @@ static bool build_next_page(void)
     return true;
 }
 
+/* 自动翻页：每次换页都要把本页的计时归零（实现见「自动翻页」一节） */
+static void auto_reset(void);
+
 /**
  * @brief 渲染第 idx 页；页起点没算到这一页就先往后推导
  */
@@ -355,6 +358,9 @@ static void show_page(int idx)
 
     srv_reader_seek(start);
     srv_reader_save_progress();
+
+    /* 换页了，自动翻页的进度线从顶部重新扫 */
+    auto_reset();
 }
 
 /* ===================== 交互 ===================== */
@@ -464,6 +470,135 @@ static void turn_prev(void)
     /* 没有上一章：什么都不做 */
 }
 
+/* ===================== 自动翻页 =====================
+ *
+ * 开启后一条细横线从正文顶部匀速扫到底部，扫到底就翻下一页。
+ * 用线的位置直接表示「这页还剩多少时间」，比角落里的小图标直观。
+ */
+
+#define AUTO_LINE_H     2
+#define AUTO_TICK_MS    100
+#define AUTO_LINE_TOP   (UI_TITLEBAR_H + 4)
+#define AUTO_LINE_BOT   (UI_SCREEN_H - RD_BOTTOM_H - 4)
+#define AUTO_SEC_DEF    15
+#define AUTO_SEC_MIN    5
+#define AUTO_SEC_MAX    600
+
+static lv_timer_t *s_auto_timer = NULL;
+static lv_obj_t   *s_auto_line  = NULL;
+static bool        s_auto_on    = false;
+static bool        s_auto_hold  = false;   /*!< 菜单打开期间临时挂起，菜单关闭后可恢复 */
+static int         s_auto_sec   = AUTO_SEC_DEF;
+static uint32_t    s_auto_begin = 0;
+
+static int auto_sec_load(void)
+{
+    int sec = (int)srv_config_get_int(CFG_READ_AUTO_SEC, AUTO_SEC_DEF);
+    if (sec < AUTO_SEC_MIN) {
+        sec = AUTO_SEC_MIN;
+    }
+    if (sec > AUTO_SEC_MAX) {
+        sec = AUTO_SEC_MAX;
+    }
+    return sec;
+}
+
+/* 本页计时归零：线回到顶部；没开自动翻页时保持隐藏 */
+static void auto_reset(void)
+{
+    s_auto_begin = lv_tick_get();
+    if (s_auto_line == NULL) {
+        return;
+    }
+    lv_obj_set_y(s_auto_line, AUTO_LINE_TOP);
+    if (s_auto_on) {
+        lv_obj_remove_flag(s_auto_line, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_auto_line, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/* 后面还有没有页可翻（页表内 / 本章未排完 / 还有下一章） */
+static bool auto_has_next(void)
+{
+    if (s_page_cur + 1 < s_page_cnt) {
+        return true;
+    }
+    if (s_page_cnt < PAGE_MAX && build_next_page()) {
+        return true;
+    }
+    if (s_page_cnt >= PAGE_MAX) {
+        return false;
+    }
+    return (srv_reader_chapter_index() + 1 < srv_reader_chapter_count());
+}
+
+static void auto_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_auto_on || s_auto_line == NULL) {
+        return;
+    }
+
+    uint32_t total = (uint32_t)s_auto_sec * 1000u;
+    uint32_t spent = lv_tick_elaps(s_auto_begin);
+
+    if (spent >= total) {
+        if (!auto_has_next()) {
+            /* 到书尾就安静停下 —— 不能继续调 turn_next，
+             * 那样每 100ms 会弹一次「全书完」 */
+            s_auto_on = false;
+            lv_obj_add_flag(s_auto_line, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "自动翻页到书尾，已停止");
+            return;
+        }
+        turn_next();                /* show_page 里会把计时重置 */
+        return;
+    }
+
+    lv_coord_t span = AUTO_LINE_BOT - AUTO_LINE_TOP;
+    lv_coord_t y = AUTO_LINE_TOP + (lv_coord_t)((int64_t)spent * span / total);
+    lv_obj_set_y(s_auto_line, y);
+}
+
+/* 开 / 关自动翻页；开启时顺带创建定时器（user_data 存 root，销毁时好判断归属） */
+static void auto_set(bool on)
+{
+    if (s_auto_line == NULL) {
+        return;
+    }
+    s_auto_on   = on;
+    s_auto_hold = false;
+
+    if (on && s_auto_timer == NULL) {
+        lv_obj_t *root = lv_obj_get_parent(s_auto_line);
+        s_auto_timer = lv_timer_create(auto_tick_cb, AUTO_TICK_MS, root);
+    }
+
+    auto_reset();
+    ESP_LOGI(TAG, "自动翻页%s（间隔 %d 秒）", on ? "开启" : "关闭", s_auto_sec);
+}
+
+/* 弹菜单时先挂起，免得菜单还开着页面自己翻走 */
+static void auto_suspend(void)
+{
+    if (s_auto_on) {
+        s_auto_hold = true;
+        s_auto_on   = false;
+        if (s_auto_line != NULL) {
+            lv_obj_add_flag(s_auto_line, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+/* 菜单取消时恢复原来的开关状态 */
+static void auto_resume(void)
+{
+    if (s_auto_hold) {
+        auto_set(true);
+    }
+}
+
 /* ===================== 长按菜单 ===================== */
 
 /* 跳转弹层（章节 / 页码）在下面实现，这里先声明 */
@@ -473,10 +608,45 @@ enum {
     ACT_COVER = 0,
     ACT_INTRO,
     ACT_GOTO,
+    ACT_AUTO,
+    ACT_AUTO_SEC,
 };
 
 static int s_menu_act[UI_MENU_MAX_ITEMS];
 static char s_book_name[SRV_BOOK_NAME_MAX];
+
+/* 翻页间隔档位：5 档正好塞满一个菜单（再多就超出 240 高的屏幕了） */
+#define AUTO_SEC_N  5
+static const int s_auto_choices[AUTO_SEC_N] = {10, 15, 20, 30, 60};
+
+static void on_auto_sec_pick(int idx, void *arg)
+{
+    (void)arg;
+    if (idx < 0 || idx >= AUTO_SEC_N) {
+        return;
+    }
+    s_auto_sec = s_auto_choices[idx];
+    srv_config_set_int(CFG_READ_AUTO_SEC, s_auto_sec);
+    auto_set(true);                     /* 选完直接开始，省一次点击 */
+}
+
+static void auto_sec_menu_show(void)
+{
+    ui_menu_item_t items[AUTO_SEC_N];
+    char texts[AUTO_SEC_N][16];
+
+    for (int i = 0; i < AUTO_SEC_N; i++) {
+        if (s_auto_choices[i] == s_auto_sec) {
+            snprintf(texts[i], sizeof(texts[i]), "%d 秒 · 当前", s_auto_choices[i]);
+        } else {
+            snprintf(texts[i], sizeof(texts[i]), "%d 秒", s_auto_choices[i]);
+        }
+        items[i].text = texts[i];
+        items[i].icon = NULL;
+    }
+    /* 文本由 lv_label_set_text 复制，栈上的 texts 出了函数也没事 */
+    ui_menu_show("翻页间隔", items, AUTO_SEC_N, on_auto_sec_pick, NULL);
+}
 
 static void act_show_cover(void)
 {
@@ -524,18 +694,29 @@ static void on_menu_pick(int idx, void *arg)
 {
     (void)arg;
     if (idx < 0 || idx >= UI_MENU_MAX_ITEMS) {
-        return;                         /* 取消，或点了菜单外的空白 */
+        auto_resume();                  /* 取消：恢复菜单打开前的开关状态 */
+        return;
     }
 
     switch (s_menu_act[idx]) {
     case ACT_COVER:
+        s_auto_hold = false;            /* 看封面期间不自动翻页，回来也不自己恢复 */
         act_show_cover();
         break;
     case ACT_INTRO:
+        s_auto_hold = false;
         act_show_intro();
         break;
     case ACT_GOTO:
+        s_auto_hold = false;
         goto_show();
+        break;
+    case ACT_AUTO:
+        /* 挂起时 s_auto_on 已被置 false，真实状态在 s_auto_hold 里 */
+        auto_set(!(s_auto_on || s_auto_hold));
+        break;
+    case ACT_AUTO_SEC:
+        auto_sec_menu_show();
         break;
     default:
         break;
@@ -581,6 +762,18 @@ static void on_reader_long(lv_event_t *e)
     }
     s_menu_act[n++] = ACT_GOTO;
 
+    items[n].text = (s_auto_on || s_auto_hold) ? "停止自动翻页" : "自动翻页";
+    items[n].icon = &ic_play;
+    s_menu_act[n++] = ACT_AUTO;
+
+    static char sec_text[20];
+    snprintf(sec_text, sizeof(sec_text), "翻页间隔 %d 秒", s_auto_sec);
+    items[n].text = sec_text;
+    items[n].icon = &ic_timer;
+    s_menu_act[n++] = ACT_AUTO_SEC;
+
+    /* 菜单弹出期间先挂起自动翻页，避免菜单还开着页面自己翻走 */
+    auto_suspend();
     ui_menu_show(s_book_name, items, n, on_menu_pick, NULL);
 }
 
@@ -1449,6 +1642,17 @@ static void reader_root_del_cb(lv_event_t *e)
         s_info_lb = NULL;
         s_measure = NULL;
     }
+
+    /* 自动翻页：定时器按 root 认领，线对象随页面一起销毁 */
+    if (s_auto_timer != NULL && lv_timer_get_user_data(s_auto_timer) == root) {
+        lv_timer_delete(s_auto_timer);
+        s_auto_timer = NULL;
+    }
+    if (s_auto_line != NULL && lv_obj_get_parent(s_auto_line) == root) {
+        s_auto_line = NULL;
+    }
+    s_auto_on   = false;
+    s_auto_hold = false;
 }
 
 /**
@@ -1623,6 +1827,24 @@ static void reader_build_content(lv_obj_t *root)
     lv_obj_set_style_text_font(s_info_lb, &font_ui_14, 0);
     lv_label_set_text(s_info_lb, "");
     lv_obj_align(s_info_lb, LV_ALIGN_BOTTOM_MID, 0, -3);
+
+    /* 自动翻页：每次进书都按「关闭」起步，间隔沿用上次设置 */
+    s_auto_sec  = auto_sec_load();
+    s_auto_on   = false;
+    s_auto_hold = false;
+
+    /* 自动翻页进度线：2px 细横线，开启后从正文顶部扫到底部，扫到底翻下一页。
+     * 后创建 = 画在正文之上，不会被文字盖住。 */
+    s_auto_line = lv_obj_create(root);
+    lv_obj_remove_flag(s_auto_line, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(s_auto_line, PAGE_TEXT_W, AUTO_LINE_H);
+    lv_obj_set_pos(s_auto_line, RD_MARGIN, AUTO_LINE_TOP);
+    lv_obj_set_style_bg_color(s_auto_line, UI_COLOR_PRIMARY, 0);
+    lv_obj_set_style_bg_opa(s_auto_line, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_auto_line, 0, 0);
+    lv_obj_set_style_radius(s_auto_line, 0, 0);
+    lv_obj_set_style_pad_all(s_auto_line, 0, 0);
+    lv_obj_add_flag(s_auto_line, LV_OBJ_FLAG_HIDDEN);
 
     /* 翻页交互统一挂在 root 上：滑动按方向翻、轻点按落点翻（左右各三分之一）。
      * 不再单独建透明点击带 —— 那样「在带上滑动」会既走手势又走点击，翻两页。 */

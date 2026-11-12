@@ -56,6 +56,7 @@ typedef struct {
     int32_t read_line_space;                            /*!< 行距 */
     int32_t read_para_space;                            /*!< 段距：一格 10 = 段间一个空行 */
     int32_t read_keep_bright;                           /*!< 阅读器里不自动降亮度 0/1 */
+    int32_t read_auto_sec;                              /*!< 自动翻页间隔（秒） */
     int32_t shelf_recent;                               /*!< 书架按最近阅读排序 0/1 */
 
     /* 传感器 */
@@ -99,6 +100,7 @@ typedef struct {
 #define CFG_READ_LINE_SP    "read_line_space"
 #define CFG_READ_PARA_SP    "read_para_space"
 #define CFG_READ_KEEP_BRIGHT "read_keep_bright"
+#define CFG_READ_AUTO_SEC   "read_auto_sec"    /*!< 自动翻页间隔（秒） */
 #define CFG_SHELF_RECENT    "shelf_recent"
 #define CFG_TEMP_REC_EN     "temp_rec_en"
 #define CFG_TIMER_SOUND     "timer_sound"
