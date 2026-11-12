@@ -16,6 +16,18 @@ jobs:
       # 复用仓库里的 sdkconfig（目标 esp32c5、PSRAM、分区表都在里面）
       # 注意：Jobs container 会覆盖镜像 entrypoint，IDF 环境不会自动加载，
       # 必须自己 source 一次，否则 idf.py 不在 PATH 里（exit code 127）
+      - name: Prepare components
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py --no-ccache reconfigure
+          # waveshare/pcf85063a 1.1.1 的 CMakeLists 没声明 esp_driver_i2c，
+          # IDF 6.x 下会找不到 driver/i2c_master.h。managed_components 不入库，
+          # 只能在这里补上（本地环境是手动改过的）
+          sed -i 's/INCLUDE_DIRS "include"/INCLUDE_DIRS "include" REQUIRES esp_driver_i2c/' \
+            managed_components/waveshare__pcf85063a/CMakeLists.txt
+          grep -q esp_driver_i2c managed_components/waveshare__pcf85063a/CMakeLists.txt
+
       - name: Build firmware
         shell: bash
         run: |
