@@ -626,7 +626,7 @@ static void on_auto_sec_pick(int idx, void *arg)
         return;
     }
     s_auto_sec = s_auto_choices[idx];
-    srv_config_set_int(CFG_READ_AUTO_SEC, s_auto_sec);
+    srv_config_set_int(CFG_READ_AUTO_SEC, s_auto_sec, true);
     auto_set(true);                     /* 选完直接开始，省一次点击 */
 }
 
