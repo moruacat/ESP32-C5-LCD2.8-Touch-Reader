@@ -32,6 +32,10 @@
 #define ROW2_Y      (Y0 + ROW1_H + GAP)
 #define ROW3_Y      (Y0 + ROW1_H + GAP + ROW2_H + GAP)
 
+/* 第三行 4 格（照片/录音机/AI/计算器）：4*70 + 3*8 = 304，与 320 宽两边的 8px 边距正好对上 */
+#define COL4_W      70
+#define COL4_STEP   (COL4_W + GAP)
+
 /* ===================== 照片入口（带密码校验） ===================== */
 
 /**
@@ -106,6 +110,12 @@ static void on_ai(lv_event_t *e)
     app_navigator_switch(PAGE_AI, true);
 }
 
+static void on_calc(lv_event_t *e)
+{
+    (void)e;
+    app_navigator_switch(PAGE_CALCULATOR, true);
+}
+
 void ui_func_create(lv_obj_t *root)
 {
     ui_titlebar_create(root, "功能", app_navigator_back_smart_cb, NULL);
@@ -120,13 +130,16 @@ void ui_func_create(lv_obj_t *root)
     ui_card_create(root, X0 + COL_STEP, ROW2_Y, COL_W, ROW2_H,
                    &ic_radio, "电台", 0x1585C0, on_radio, NULL);
 
-    /* 第三行：照片 | 录音机 | AI */
-    ui_card_create(root, X0, ROW3_Y, COL_W, ROW3_H,
+    /* 第三行：照片 | 录音机 | AI | 计算器
+     * 加入计算器后第三行改成 4 格：4*70 + 3*8 = 304，正好铺满一行 */
+    ui_card_create(root, X0, ROW3_Y, COL4_W, ROW3_H,
                    &ic_image, "照片", 0x3B9EFF, on_photos, NULL);
-    ui_card_create(root, X0 + COL_STEP, ROW3_Y, COL_W, ROW3_H,
+    ui_card_create(root, X0 + COL4_STEP, ROW3_Y, COL4_W, ROW3_H,
                    &ic_record, "录音机", 0xE5484D, on_recorder, NULL);
-    ui_card_create(root, X0 + COL_STEP * 2, ROW3_Y, COL_W, ROW3_H,
+    ui_card_create(root, X0 + COL4_STEP * 2, ROW3_Y, COL4_W, ROW3_H,
                    &ic_ai, "AI", 0x7C4DFF, on_ai, NULL);
+    ui_card_create(root, X0 + COL4_STEP * 3, ROW3_Y, COL4_W, ROW3_H,
+                   &ic_calculator, "计算器", 0xF5A623, on_calc, NULL);
 
     /* 右侧一列：音乐，跨前两行 */
     ui_card_create(root, X0 + COL_STEP * 2, Y0, COL_W, ROW1_H + GAP + ROW2_H,

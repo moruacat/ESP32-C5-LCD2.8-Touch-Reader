@@ -7,6 +7,7 @@ idf_component_register(
         "ui/ui_clock.c"
         "ui/ui_home.c"
         "ui/ui_func.c"
+        "ui/ui_calculator.c"
         "ui/ui_settings.c"
         "ui/ui_set_net.c"
         "ui/ui_set_net_add.c"

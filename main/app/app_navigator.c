@@ -5,6 +5,7 @@
 #include "ui_clock.h"
 #include "ui_home.h"
 #include "ui_func.h"
+#include "ui_calculator.h"
 #include "ui_settings.h"
 #include "ui_set_pages.h"
 #include "ui_timer.h"
@@ -72,6 +73,7 @@ static const app_page_ops_t s_page_ops[PAGE_MAX] = {
     [PAGE_WORD_STUDY] = {.build = ui_word_study_create},
     [PAGE_RADIO]     = {.build = ui_radio_create},
     [PAGE_AI]        = {.build = ui_ai_create},
+    [PAGE_CALCULATOR] = {.build = ui_calculator_create},
     [PAGE_BOOKSHELF] = {.build = ui_bookshelf_create},
     [PAGE_READER]    = {.build = ui_reader_create},
     [PAGE_MUSIC]     = {.build = ui_music_create},

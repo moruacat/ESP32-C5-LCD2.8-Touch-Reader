@@ -47,6 +47,7 @@ typedef enum {
     PAGE_WORD_STUDY,    /*!< 单词学习（分单元卡片） */
     PAGE_RADIO,         /*!< 电台（中国之声 · HLS 在线直播） */
     PAGE_AI,            /*!< 小智 AI 语音对话 */
+    PAGE_CALCULATOR,    /*!< 计算器 */
     PAGE_MAX,
 } app_page_id_t;
 
