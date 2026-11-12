@@ -46,6 +46,14 @@ esp_err_t srv_ntp_sync_now(uint32_t timeout_ms);
  */
 esp_err_t srv_ntp_write_rtc(void);
 
+/**
+ * @brief 以当前 RTC 日期重置「每日自动偏移」基准
+ *
+ * NTP 校时成功、手动调时、重新打开 NTP 后调用。每日偏移只在没有
+ * 新 NTP 基准的期间按天累计补偿，避免重复补正。
+ */
+void srv_ntp_daily_reset_anchor(void);
+
 #ifdef __cplusplus
 }
 #endif

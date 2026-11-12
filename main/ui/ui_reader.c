@@ -615,39 +615,32 @@ enum {
 static int s_menu_act[UI_MENU_MAX_ITEMS];
 static char s_book_name[SRV_BOOK_NAME_MAX];
 
-/* 翻页间隔档位：5 档正好塞满一个菜单（再多就超出 240 高的屏幕了） */
-#define AUTO_SEC_N  5
-static const int s_auto_choices[AUTO_SEC_N] = {10, 15, 20, 30, 60};
-
-static void on_auto_sec_pick(int idx, void *arg)
+/* 翻页间隔：直接输入秒数，不再用固定档位菜单。 */
+static void on_auto_sec_done(int value, void *arg)
 {
     (void)arg;
-    if (idx < 0 || idx >= AUTO_SEC_N) {
-        return;
+    if (value < AUTO_SEC_MIN) {
+        value = AUTO_SEC_MIN;
     }
-    s_auto_sec = s_auto_choices[idx];
+    if (value > AUTO_SEC_MAX) {
+        value = AUTO_SEC_MAX;
+    }
+    s_auto_sec = value;
     srv_config_set_int(CFG_READ_AUTO_SEC, s_auto_sec, true);
     auto_set(true);                     /* 选完直接开始，省一次点击 */
 }
 
-static void auto_sec_menu_show(void)
+static void on_auto_sec_cancel(void *arg)
 {
-    ui_menu_item_t items[AUTO_SEC_N];
-    /* 16 字节装不下 "15 秒 · 当前"（中文字符 3 字节），GCC 的
-     * -Wformat-truncation 会直接报错，这里按最大值留够 */
-    char texts[AUTO_SEC_N][24];
+    (void)arg;
+    auto_resume();                      /* 取消输入时恢复打开菜单前的自动翻页状态 */
+}
 
-    for (int i = 0; i < AUTO_SEC_N; i++) {
-        if (s_auto_choices[i] == s_auto_sec) {
-            snprintf(texts[i], sizeof(texts[i]), "%d 秒 · 当前", s_auto_choices[i]);
-        } else {
-            snprintf(texts[i], sizeof(texts[i]), "%d 秒", s_auto_choices[i]);
-        }
-        items[i].text = texts[i];
-        items[i].icon = NULL;
-    }
-    /* 文本由 lv_label_set_text 复制，栈上的 texts 出了函数也没事 */
-    ui_menu_show("翻页间隔", items, AUTO_SEC_N, on_auto_sec_pick, NULL);
+static void auto_sec_show(void)
+{
+    ui_number_input_show_ex("翻页间隔（秒）", AUTO_SEC_MIN, AUTO_SEC_MAX,
+                            s_auto_sec, on_auto_sec_done, NULL,
+                            on_auto_sec_cancel, NULL);
 }
 
 static void act_show_cover(void)
@@ -718,7 +711,7 @@ static void on_menu_pick(int idx, void *arg)
         auto_set(!(s_auto_on || s_auto_hold));
         break;
     case ACT_AUTO_SEC:
-        auto_sec_menu_show();
+        auto_sec_show();
         break;
     default:
         break;
@@ -775,9 +768,10 @@ static void on_reader_long(lv_event_t *e)
     items[n].icon = &ic_timer;
     s_menu_act[n++] = ACT_AUTO_SEC;
 
-    /* 菜单弹出期间先挂起自动翻页，避免菜单还开着页面自己翻走 */
+    /* 菜单弹出期间先挂起自动翻页，避免菜单还开着页面自己翻走。
+     * 阅读器菜单最多 5 项，用两列排，按钮不再被压成细条。 */
     auto_suspend();
-    ui_menu_show(s_book_name, items, n, on_menu_pick, NULL);
+    ui_menu_show_2col(s_book_name, items, n, on_menu_pick, NULL);
 }
 
 /* ===================== 滑动手势 / 轻点翻页 ===================== */

@@ -12,7 +12,11 @@
 static lv_obj_t *s_ntp_lb;      /*!< NTP 开关状态 */
 static lv_obj_t *s_tz_lb;       /*!< 时区显示 */
 static lv_obj_t *s_off_lb;      /*!< 秒级微调显示 */
+static lv_obj_t *s_daily_lb;    /*!< 每日自动偏移显示 */
 static lv_obj_t *s_manual_lb;   /*!< 手动调时按钮 */
+
+#define NTP_FINE_MIN   (-60)
+#define NTP_FINE_MAX   60
 
 static int days_in_month(int year, int month)
 {
@@ -44,6 +48,11 @@ static void time_refresh(void)
     snprintf(buf, sizeof(buf), "%+d 秒", fine);
     lv_label_set_text(s_off_lb, buf);
 
+    /* 每日自动偏移：没有 NTP 服务时按天补到 RTC，单位是秒/天 */
+    int daily = (int)srv_config_get_int(CFG_NTP_DAILY, CFG_DEF_NTP_DAILY);
+    snprintf(buf, sizeof(buf), "%+d 秒", daily);
+    lv_label_set_text(s_daily_lb, buf);
+
     /* 手动调时：NTP 开着的时候不给改，否则下一次校时就被覆盖，
      * 看起来像"改了没生效"。 */
     srv_rtc_time_t t;
@@ -67,6 +76,9 @@ static void on_ntp_toggle(lv_event_t *e)
     srv_config_set_int(CFG_NTP_EN, on ? 1 : 0, true);
 
     if (on) {
+        /* 重新打开 NTP 时以当前 RTC 为新的每日偏移基准，
+         * 避免把关闭期间的天数也一次性补进来。 */
+        srv_ntp_daily_reset_anchor();
         srv_ntp_autostart();
     } else {
         srv_ntp_stop();
@@ -94,24 +106,54 @@ static void on_tz_click(lv_event_t *e)
     ui_picker_show("时区", 1, cols, on_tz_done, NULL);
 }
 
-/* ----- 偏移（秒级微调，-60 ~ +60 秒） ----- */
+/* ----- NTP 偏移：数值输入 + 加减按钮，不再用滚轮 ----- */
 
-static void on_off_done(const int *v, void *arg)
+static void on_off_step(lv_event_t *e)
 {
-    (void)arg;
-
-    srv_config_set_int(CFG_NTP_FINE, v[0], true);
+    int delta = (int)(intptr_t)lv_event_get_user_data(e);
+    int value = (int)srv_config_get_int(CFG_NTP_FINE, CFG_DEF_NTP_FINE) + delta;
+    srv_config_set_int(CFG_NTP_FINE, value, true);
     time_refresh();
 }
 
-static void on_off_click(lv_event_t *e)
+static void on_off_edit_done(int value, void *arg)
+{
+    (void)arg;
+    srv_config_set_int(CFG_NTP_FINE, value, true);
+    time_refresh();
+}
+
+static void on_off_edit(lv_event_t *e)
 {
     (void)e;
+    int value = (int)srv_config_get_int(CFG_NTP_FINE, CFG_DEF_NTP_FINE);
+    ui_number_input_show("NTP 偏移（秒）", NTP_FINE_MIN, NTP_FINE_MAX,
+                         value, on_off_edit_done, NULL);
+}
 
-    const ui_picker_col_t cols[1] = {
-        {"秒", -60, 121, (int)srv_config_get_int(CFG_NTP_FINE, CFG_DEF_NTP_FINE)},
-    };
-    ui_picker_show("NTP 偏移", 1, cols, on_off_done, NULL);
+/* ----- 每日自动偏移：同样的数值输入 + 加减按钮 ----- */
+
+static void on_daily_step(lv_event_t *e)
+{
+    int delta = (int)(intptr_t)lv_event_get_user_data(e);
+    int value = (int)srv_config_get_int(CFG_NTP_DAILY, CFG_DEF_NTP_DAILY) + delta;
+    srv_config_set_int(CFG_NTP_DAILY, value, true);
+    time_refresh();
+}
+
+static void on_daily_edit_done(int value, void *arg)
+{
+    (void)arg;
+    srv_config_set_int(CFG_NTP_DAILY, value, true);
+    time_refresh();
+}
+
+static void on_daily_edit(lv_event_t *e)
+{
+    (void)e;
+    int value = (int)srv_config_get_int(CFG_NTP_DAILY, CFG_DEF_NTP_DAILY);
+    ui_number_input_show("每日自动偏移（秒/天）", NTP_FINE_MIN, NTP_FINE_MAX,
+                         value, on_daily_edit_done, NULL);
 }
 
 /* ----- 手动调时 ----- */
@@ -137,6 +179,8 @@ static void on_manual_done(const int *v, void *arg)
     t.dotw = srv_rtc_calc_dotw(t.year, t.month, t.day);
 
     srv_rtc_set_time(&t);
+    /* 手动设置的是当前正确时间，把它作为每日偏移的新基准。 */
+    srv_ntp_daily_reset_anchor();
     time_refresh();
 }
 
@@ -177,9 +221,16 @@ void ui_set_time_create(lv_obj_t *root)
     s_tz_lb = ui_row_btn_create(row, -8, 76, "UTC+8", on_tz_click, NULL);
 
     row = ui_row_create(list, UI_ROW_Y(2), NULL, "NTP 偏移");
-    s_off_lb = ui_row_btn_create(row, -8, 76, "0 秒", on_off_click, NULL);
+    s_off_lb = ui_row_btn_create(row, -44, 64, "+0 秒", on_off_edit, NULL);
+    ui_row_btn_create(row, -8, 34, "+", on_off_step, (void *)(intptr_t)1);
+    ui_row_btn_create(row, -108, 34, "-", on_off_step, (void *)(intptr_t)-1);
 
-    row = ui_row_create(list, UI_ROW_Y(3), NULL, "手动调时");
+    row = ui_row_create(list, UI_ROW_Y(3), NULL, "每日自动偏移");
+    s_daily_lb = ui_row_btn_create(row, -44, 64, "+0 秒", on_daily_edit, NULL);
+    ui_row_btn_create(row, -8, 34, "+", on_daily_step, (void *)(intptr_t)1);
+    ui_row_btn_create(row, -108, 34, "-", on_daily_step, (void *)(intptr_t)-1);
+
+    row = ui_row_create(list, UI_ROW_Y(4), NULL, "手动调时");
     s_manual_lb = ui_row_btn_create(row, -8, 76, "--:--", on_manual_click, NULL);
 
     time_refresh();

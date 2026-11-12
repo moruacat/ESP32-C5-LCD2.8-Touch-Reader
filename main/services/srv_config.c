@@ -73,6 +73,9 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_NTP_EN,          ntp_en,           1,      0, 1),
     I32(CFG_NTP_TZ,          ntp_tz,           CFG_DEF_NTP_TZ,       -12, 14),
     I32(CFG_NTP_FINE,        ntp_fine,         CFG_DEF_NTP_FINE,     -60, 60),
+    I32(CFG_NTP_DAILY,       ntp_daily,        CFG_DEF_NTP_DAILY,    -60, 60),
+    /* 内部基准日期：第一次写入后才会变成非 0。上限足够覆盖到 2243 年。 */
+    I32(CFG_NTP_DAILY_DAY,   ntp_daily_day,    0,                    0, 100000),
 
     /* 闹钟 */
     I32(CFG_ALARM_VOLUME,    alarm_volume,     CFG_DEF_ALARM_VOLUME, 0, 100),
@@ -94,7 +97,7 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_READ_PARA_SP,    read_para_space,  0,      0, 40),
     /* 阅读器里默认允许自动变暗，想安安静静看书可以关掉 */
     I32(CFG_READ_KEEP_BRIGHT, read_keep_bright, 0,     0, 1),
-    /* 自动翻页面板里的档位是 10/15/20/30/60，范围放宽一些，手改配置也吃得下 */
+    /* 自动翻页间隔直接输入秒数，范围 5~600 秒。 */
     I32(CFG_READ_AUTO_SEC,    read_auto_sec,   15,     5, 600),
     /* 书架按最近阅读排序：越后读的越靠前 */
     I32(CFG_SHELF_RECENT,    shelf_recent,      CFG_DEF_SHELF_RECENT, 0, 1),

@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -26,11 +27,161 @@ static const char *NTP_SERVERS[] = {
 #define WAIT_ONLINE_MAX_MS   300000     /* 等联网上限 5 分钟 */
 #define WAIT_SYNC_MAX_MS     30000      /* 等单次同步上限 30 秒 */
 #define SYNC_INTERVAL_S      21600      /* 每 6 小时重新联网校时一次 */
+#define NTP_DAILY_CHECK_MS   900000     /* 每 15 分钟检查一次本地日期是否跨天 */
+#define NTP_DAILY_MAX_DAYS   3660       /* 最多补 10 年，防止 RTC 被重置后乱跳 */
 
 static bool   s_inited      = false;
 static bool   s_started     = false;
 static bool   s_synced      = false;
 static char   s_last_sync[24];
+
+/* ===================== 每日自动偏移的日期工具 =====================
+ *
+ * RTC 里存的是本地时间。这里只做「本地日期序号」和「RTC 秒数」之间的
+ * 换算，不依赖 POSIX 时区环境（设备上并没有配置 TZ 变量）。
+ */
+
+static int32_t days_from_civil(int year, int month, int day)
+{
+    int y = year - (month <= 2);
+    int era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (unsigned)((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1);
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (int32_t)era * 146097 + (int32_t)doe - 719468;
+}
+
+static void civil_from_days(int32_t z, int *year, int *month, int *day)
+{
+    z += 719468;
+    int era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = (unsigned)(z - era * 146097);
+    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int y = (int)yoe + era * 400;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    unsigned mp = (5 * doy + 2) / 153;
+    unsigned d = doy - (153 * mp + 2) / 5 + 1;
+    int m = (int)mp + (mp < 10 ? 3 : -9);
+    *year = y + (m <= 2);
+    *month = m;
+    *day = (int)d;
+}
+
+static int32_t rtc_day_number(const srv_rtc_time_t *t)
+{
+    return days_from_civil(t->year, t->month, t->day);
+}
+
+static int64_t rtc_to_epoch_seconds(const srv_rtc_time_t *t)
+{
+    int32_t days = rtc_day_number(t);
+    return (int64_t)days * 86400 + (int64_t)t->hour * 3600
+           + (int64_t)t->min * 60 + t->sec;
+}
+
+static bool epoch_seconds_to_rtc(int64_t seconds, srv_rtc_time_t *t)
+{
+    int64_t days64 = seconds / 86400;
+    int64_t rem = seconds % 86400;
+    if (rem < 0) {
+        rem += 86400;
+        days64--;
+    }
+    if (days64 < INT32_MIN || days64 > INT32_MAX) {
+        return false;
+    }
+
+    int year = 0;
+    int month = 1;
+    int day = 1;
+    civil_from_days((int32_t)days64, &year, &month, &day);
+    t->year = year;
+    t->month = month;
+    t->day = day;
+    t->hour = (int)(rem / 3600);
+    t->min = (int)((rem % 3600) / 60);
+    t->sec = (int)(rem % 60);
+    t->dotw = srv_rtc_calc_dotw(t->year, t->month, t->day);
+    return true;
+}
+
+/*
+ * 把「从上次基准日期到今天」漏掉的每日偏移补到 RTC。
+ * 该函数只负责补偿离线/无 NTP 期间的累计误差；真正收到 NTP 时间后，
+ * srv_ntp_sync_now() 会把基准重置为网络时间，不会在准确时间上再叠加。
+ */
+static void ntp_daily_catchup(void)
+{
+    if (srv_config_get_int(CFG_NTP_EN, 1) == 0) {
+        return;
+    }
+
+    srv_rtc_time_t now;
+    if (srv_rtc_get_time(&now) != ESP_OK || !srv_rtc_time_valid(&now)) {
+        return;
+    }
+
+    int32_t day_now = rtc_day_number(&now);
+    int32_t last_day = (int32_t)srv_config_get_int(CFG_NTP_DAILY_DAY, 0);
+    int32_t daily = (int32_t)srv_config_get_int(CFG_NTP_DAILY, CFG_DEF_NTP_DAILY);
+
+    if (last_day <= 0 || day_now < last_day) {
+        srv_config_set_int(CFG_NTP_DAILY_DAY, day_now, true);
+        return;
+    }
+
+    int32_t days = day_now - last_day;
+    if (days <= 0) {
+        return;
+    }
+    if (days > NTP_DAILY_MAX_DAYS) {
+        ESP_LOGW(TAG, "每日偏移基准跨度过大（%d 天），只重置基准不做补正", (int)days);
+        srv_config_set_int(CFG_NTP_DAILY_DAY, day_now, true);
+        return;
+    }
+    if (daily == 0) {
+        srv_config_set_int(CFG_NTP_DAILY_DAY, day_now, true);
+        return;
+    }
+
+    int64_t delta = (int64_t)daily * days;
+    int64_t adjusted = rtc_to_epoch_seconds(&now) + delta;
+    srv_rtc_time_t fixed;
+    if (!epoch_seconds_to_rtc(adjusted, &fixed) || !srv_rtc_time_valid(&fixed)) {
+        ESP_LOGW(TAG, "每日偏移补正结果超出范围，跳过");
+        return;
+    }
+
+    esp_err_t ret = srv_rtc_set_time(&fixed);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "每日偏移写 RTC 失败: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    int32_t fixed_day = rtc_day_number(&fixed);
+    srv_config_set_int(CFG_NTP_DAILY_DAY, fixed_day, true);
+    ESP_LOGI(TAG, "每日自动偏移补正 %d 天 × %d 秒/天 = %+lld 秒",
+             (int)days, (int)daily, (long long)delta);
+}
+
+static void ntp_daily_task(void *arg)
+{
+    (void)arg;
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(NTP_DAILY_CHECK_MS));
+        ntp_daily_catchup();
+    }
+}
+
+void srv_ntp_daily_reset_anchor(void)
+{
+    srv_rtc_time_t now;
+    int32_t day = 0;
+    if (srv_rtc_get_time(&now) == ESP_OK && srv_rtc_time_valid(&now)) {
+        day = rtc_day_number(&now);
+    }
+    srv_config_set_int(CFG_NTP_DAILY_DAY, day, true);
+}
 
 /* 把系统时间（UTC 秒 + 时区 + 微调）换算成本地时间写入 RTC。
  * 这里不用 POSIX TZ 字符串（其符号与直觉相反，容易搞反）。 */
@@ -83,6 +234,13 @@ esp_err_t srv_ntp_init(void)
     }
 
     s_inited = true;
+
+    /* 先补上关机期间漏掉的每日偏移，再启动后台跨天检查。 */
+    ntp_daily_catchup();
+    if (xTaskCreate(ntp_daily_task, "ntp_daily", 3072, NULL, 2, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "每日自动偏移任务创建失败");
+    }
+
     ESP_LOGI(TAG, "NTP 就绪（服务器 %s 等 %d 个）", NTP_SERVERS[0], (int)NTP_SERVER_NUM);
     return ESP_OK;
 }
@@ -135,7 +293,12 @@ esp_err_t srv_ntp_sync_now(uint32_t timeout_ms)
     while (waited < timeout_ms) {
         if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
             s_synced = true;
-            return srv_ntp_write_rtc();
+            esp_err_t ret = srv_ntp_write_rtc();
+            if (ret == ESP_OK) {
+                /* NTP 时间是新的准确基准，之后从今天重新累计每日偏移。 */
+                srv_ntp_daily_reset_anchor();
+            }
+            return ret;
         }
         vTaskDelay(step);
         waited += 200;

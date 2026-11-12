@@ -107,6 +107,37 @@ void ui_text_input_show(const char *title, uint32_t max_len,
 void ui_text_input_show_init(const char *title, uint32_t max_len, const char *initial,
                              ui_text_input_cb_t cb, void *arg);
 
+/* ===================== 数值输入层（数字键盘） ===================== */
+
+/*! 数值输入结果回调；value 已按 min/max 夹住 */
+typedef void (*ui_number_input_cb_t)(int value, void *arg);
+/*! 数值输入取消回调 */
+typedef void (*ui_number_input_cancel_cb_t)(void *arg);
+
+/**
+ * @brief 弹出数值输入层（NTP 偏移、自动翻页间隔等用）
+ *
+ * 顶部标题 + 可直接点击编辑的输入框，下方是数字键盘。
+ * 键盘上的确定、输入框回车或顶部「确定」都会提交；取消则不回调。
+ *
+ * @param title   标题（可带单位，如「NTP 偏移（秒）」）
+ * @param min_value 允许的最小值
+ * @param max_value 允许的最大值
+ * @param initial_value 初始值（超出范围会被夹住）
+ */
+void ui_number_input_show(const char *title, int min_value, int max_value,
+                          int initial_value, ui_number_input_cb_t cb, void *arg);
+
+/**
+ * @brief 带取消回调的数值输入层
+ *
+ * 部分界面在弹数值输入前会先暂停自动翻页等后台动作，取消时需要恢复，
+ * 所以额外提供 cancel_cb；确定提交时不会调用 cancel_cb。
+ */
+void ui_number_input_show_ex(const char *title, int min_value, int max_value,
+                             int initial_value, ui_number_input_cb_t cb, void *arg,
+                             ui_number_input_cancel_cb_t cancel_cb, void *cancel_arg);
+
 /* ===================== 数字密码输入层（纯数字键盘） ===================== */
 
 /**
@@ -149,6 +180,15 @@ typedef void (*ui_menu_cb_t)(int idx, void *arg);
  */
 void ui_menu_show(const char *title, const ui_menu_item_t *items, int count,
                   ui_menu_cb_t cb, void *arg);
+
+/**
+ * @brief 弹出两列操作菜单（阅读器这种 5 项菜单用，避免把行高压扁）
+ *
+ * 原项按两列排，最后一行是横跨两列的「取消」。面板最大高度仍控制在
+ * 320x240 屏幕内，图标和文字都有正常手指点击面积。
+ */
+void ui_menu_show_2col(const char *title, const ui_menu_item_t *items, int count,
+                       ui_menu_cb_t cb, void *arg);
 
 /* ===================== 长文本层（简介等） ===================== */
 

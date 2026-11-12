@@ -13,8 +13,8 @@
 
 /* 滚轮最多列数：日期需要 年/月/日/时/分 五列，留一列余量 */
 #define PICKER_MAX_COLS  6
-/*! 选项字符串缓冲：最长的一列是分钟 0~59，约 170 字节 */
-#define PICKER_OPT_MAX   256
+/*! 选项字符串缓冲：亮度 1~100 这一类单列 100 项也放得下。 */
+#define PICKER_OPT_MAX   512
 /*! 面板最小宽度：底部要放得下「取消 + 确定」两个按钮（96*2 + 边距） */
 #define PANEL_MIN_W      232
 
@@ -29,6 +29,15 @@ static int               s_pick_start[PICKER_MAX_COLS];
 static int               s_pick_cols;
 static ui_picker_done_cb_t s_pick_cb;
 static void             *s_pick_arg;
+
+static lv_obj_t         *s_num_mask;
+static lv_obj_t         *s_num_ta;
+static int               s_num_min;
+static int               s_num_max;
+static ui_number_input_cb_t s_num_cb;
+static void             *s_num_arg;
+static ui_number_input_cancel_cb_t s_num_cancel_cb;
+static void             *s_num_cancel_arg;
 
 static lv_obj_t      *s_alert_mask;
 static ui_alert_cb_t  s_alert_cb;
@@ -414,6 +423,203 @@ void ui_picker_show(const char *title, int col_count, const ui_picker_col_t *col
     add_btn_pair(box, (lv_coord_t)panel_w,
                  "取消", close_cb, mask,
                  "确定", picker_ok_cb, mask, true);
+}
+
+/* ===================== 数值输入层（数字键盘） ===================== */
+
+#define NUM_PANEL_H  66
+#define NUM_KB_TOP   74
+#define NUM_KB_H     160
+#define NUM_TEXT_MAX 8
+
+static void num_close(void)
+{
+    if (s_num_mask != NULL && lv_obj_is_valid(s_num_mask)) {
+        lv_obj_delete(s_num_mask);
+    }
+}
+
+static void num_del_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_DELETE) {
+        return;
+    }
+    if (lv_event_get_target(e) != s_num_mask) {
+        return;
+    }
+    s_num_mask = NULL;
+    s_num_ta   = NULL;
+    s_num_cb   = NULL;
+    s_num_arg  = NULL;
+    s_num_cancel_cb  = NULL;
+    s_num_cancel_arg = NULL;
+}
+
+static void num_submit(void)
+{
+    if (s_num_ta == NULL || !lv_obj_is_valid(s_num_ta)) {
+        return;
+    }
+
+    long value = strtol(lv_textarea_get_text(s_num_ta), NULL, 10);
+    if (value < s_num_min) {
+        value = s_num_min;
+    }
+    if (value > s_num_max) {
+        value = s_num_max;
+    }
+
+    ui_number_input_cb_t cb = s_num_cb;
+    void *arg = s_num_arg;
+    s_num_cancel_cb  = NULL;
+    s_num_cancel_arg = NULL;
+    num_close();
+    if (cb != NULL) {
+        cb((int)value, arg);
+    }
+}
+
+static void num_ok_cb(lv_event_t *e)
+{
+    (void)e;
+    num_submit();
+}
+
+static void num_cancel_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_number_input_cancel_cb_t cancel = s_num_cancel_cb;
+    void *cancel_arg = s_num_cancel_arg;
+    s_num_cancel_cb  = NULL;
+    s_num_cancel_arg = NULL;
+    num_close();
+    if (cancel != NULL) {
+        cancel(cancel_arg);
+    }
+}
+
+static void num_ready_cb(lv_event_t *e)
+{
+    (void)e;
+    num_submit();
+}
+
+void ui_number_input_show_ex(const char *title, int min_value, int max_value,
+                             int initial_value, ui_number_input_cb_t cb, void *arg,
+                             ui_number_input_cancel_cb_t cancel_cb, void *cancel_arg)
+{
+    if (min_value > max_value) {
+        int tmp = min_value;
+        min_value = max_value;
+        max_value = tmp;
+    }
+
+    ui_alert_close();
+    num_close();
+
+    lv_obj_t *mask = mask_create();
+    if (mask == NULL) {
+        return;
+    }
+    lv_obj_set_style_bg_opa(mask, LV_OPA_70, 0);
+
+    s_num_mask = mask;
+    s_num_min  = min_value;
+    s_num_max  = max_value;
+    s_num_cb         = cb;
+    s_num_arg        = arg;
+    s_num_cancel_cb  = cancel_cb;
+    s_num_cancel_arg = cancel_arg;
+    lv_obj_add_event_cb(mask, num_del_cb, LV_EVENT_DELETE, NULL);
+
+    lv_obj_t *box = panel_create(mask, UI_SCREEN_W - 16, NUM_PANEL_H);
+    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 4);
+
+    lv_obj_t *ttl = lv_label_create(box);
+    lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
+    lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT, 0);
+    lv_obj_set_width(ttl, 160);
+    lv_label_set_long_mode(ttl, LV_LABEL_LONG_DOT);
+    lv_label_set_text(ttl, (title != NULL) ? title : "输入数值");
+    lv_obj_align(ttl, LV_ALIGN_TOP_LEFT, 10, 5);
+
+    lv_obj_t *cancel = lv_button_create(box);
+    lv_obj_set_size(cancel, 52, 24);
+    lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, -8, 5);
+    lv_obj_set_style_radius(cancel, 6, 0);
+    lv_obj_set_style_bg_color(cancel, UI_COLOR_BG, 0);
+    lv_obj_set_style_shadow_width(cancel, 0, 0);
+    lv_obj_set_style_pad_all(cancel, 0, 0);
+    ui_add_click_feedback(cancel);
+    lv_obj_add_event_cb(cancel, num_cancel_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *clb = lv_label_create(cancel);
+    lv_obj_set_style_text_font(clb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(clb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(clb, "取消");
+    lv_obj_center(clb);
+
+    lv_obj_t *ok = lv_button_create(box);
+    lv_obj_set_size(ok, 52, 24);
+    lv_obj_align(ok, LV_ALIGN_TOP_RIGHT, -64, 5);
+    lv_obj_set_style_radius(ok, 6, 0);
+    lv_obj_set_style_bg_color(ok, UI_COLOR_PRIMARY, 0);
+    lv_obj_set_style_shadow_width(ok, 0, 0);
+    lv_obj_set_style_pad_all(ok, 0, 0);
+    ui_add_click_feedback(ok);
+    lv_obj_add_event_cb(ok, num_ok_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *olb = lv_label_create(ok);
+    lv_obj_set_style_text_font(olb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(olb, lv_color_white(), 0);
+    lv_label_set_text(olb, "确定");
+    lv_obj_center(olb);
+
+    lv_obj_t *ta = lv_textarea_create(box);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_max_length(ta, NUM_TEXT_MAX);
+    lv_textarea_set_accepted_chars(ta, "0123456789+-");
+    lv_obj_set_size(ta, UI_SCREEN_W - 16 - 20, 26);
+    lv_obj_align(ta, LV_ALIGN_BOTTOM_LEFT, 10, -7);
+    lv_obj_set_style_bg_color(ta, UI_COLOR_BG, 0);
+    lv_obj_set_style_border_width(ta, 0, 0);
+    lv_obj_set_style_radius(ta, 6, 0);
+    lv_obj_set_style_text_font(ta, &font_ui_14, 0);
+    lv_obj_set_style_text_color(ta, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_pad_all(ta, 3, 0);
+    lv_obj_add_event_cb(ta, num_ready_cb, LV_EVENT_READY, NULL);
+    s_num_ta = ta;
+
+    char initial[16];
+    snprintf(initial, sizeof(initial), "%d", initial_value);
+    lv_textarea_set_text(ta, initial);
+    lv_textarea_set_cursor_pos(ta, LV_TEXTAREA_CURSOR_LAST);
+
+    lv_obj_t *kb = lv_keyboard_create(mask);
+    lv_obj_set_size(kb, UI_SCREEN_W - 16, NUM_KB_H);
+    lv_obj_align(kb, LV_ALIGN_TOP_MID, 0, NUM_KB_TOP);
+    lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(kb, 0, 0);
+    lv_obj_set_style_radius(kb, 0, 0);
+    lv_obj_set_style_pad_all(kb, 2, 0);
+    lv_obj_set_style_pad_row(kb, 3, 0);
+    lv_obj_set_style_pad_column(kb, 3, 0);
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_bg_color(kb, UI_COLOR_SURFACE, LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(kb, LV_OPA_COVER, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(kb, UI_COLOR_TEXT, LV_PART_ITEMS);
+    lv_obj_set_style_radius(kb, 5, LV_PART_ITEMS);
+    lv_obj_set_style_shadow_width(kb, 0, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(kb, UI_COLOR_PRIMARY,
+                              (lv_style_selector_t)(LV_PART_ITEMS | LV_STATE_PRESSED));
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+    lv_keyboard_set_textarea(kb, ta);
+}
+
+void ui_number_input_show(const char *title, int min_value, int max_value,
+                          int initial_value, ui_number_input_cb_t cb, void *arg)
+{
+    ui_number_input_show_ex(title, min_value, max_value, initial_value, cb, arg, NULL, NULL);
 }
 
 /* ===================== 文字输入层（标题 + 输入框 + 屏幕键盘） ===================== */
@@ -881,9 +1087,8 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg)
 
 /* ===================== 操作菜单 ===================== */
 
-/* 阅读器菜单要放 5 项（封面/简介/跳转/自动翻页/翻页时长），屏幕只有 240 高，
- * 按原来的行高算 34 + 5*(36+4) + 36 + 8 = 278 会溢出。这里把面板加宽、
- * 行高收紧一点：28 + 5*(30+3) + 30 + 8 = 231，仍留出手指可点的余量。 */
+/* 普通单列菜单沿用紧凑行高，5 项仍能放进 240 高屏幕；
+ * 阅读器那种 5 项长按菜单改用下面的 ui_menu_show_2col()，不再压扁按钮。 */
 #define MENU_PANEL_W   268
 #define MENU_TITLE_H   28
 #define MENU_ITEM_H    30
@@ -1019,6 +1224,106 @@ void ui_menu_show(const char *title, const ui_menu_item_t *items, int count,
     const ui_menu_item_t cancel = { "取消", NULL };
     menu_add_row(box, MENU_TITLE_H + (lv_coord_t)count * (MENU_ITEM_H + MENU_ITEM_GAP),
                  &cancel, -1, menu_item_cb, true);
+}
+
+/* ===================== 两列操作菜单 ===================== */
+
+#define MENU_2COL_W       312
+#define MENU_2COL_MARGIN  6
+#define MENU_2COL_GAP     4
+#define MENU_2COL_ITEM_H  34
+
+/* 一个菜单格子：可选图标 + 文字。文字超长时省略，不顶到格子外。 */
+static void menu_add_cell(lv_obj_t *box, lv_coord_t x, lv_coord_t y,
+                          lv_coord_t w, const ui_menu_item_t *it,
+                          int idx, lv_event_cb_t cb, bool dim)
+{
+    lv_obj_t *cell = lv_button_create(box);
+    lv_obj_remove_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(cell, w, MENU_2COL_ITEM_H);
+    lv_obj_set_pos(cell, x, y);
+    lv_obj_set_style_radius(cell, 8, 0);
+    lv_obj_set_style_bg_color(cell, UI_COLOR_BG, 0);
+    lv_obj_set_style_shadow_width(cell, 0, 0);
+    lv_obj_set_style_pad_all(cell, 0, 0);
+    ui_add_click_feedback(cell);
+    lv_obj_add_event_cb(cell, cb, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
+
+    lv_obj_t *lb = lv_label_create(cell);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(lb, dim ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
+    lv_label_set_text(lb, (it->text != NULL) ? it->text : "");
+
+    if (it->icon != NULL) {
+        lv_obj_t *ic = lv_image_create(cell);
+        lv_image_set_src(ic, it->icon);
+        lv_obj_set_style_image_recolor(ic, dim ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
+        lv_obj_set_style_radius(ic, 0, 0);
+        /* 两列菜单的格子窄，图标缩到 20px，给文字留出正常宽度。 */
+        lv_image_set_scale(ic, 20 * 256 / 32);
+        lv_obj_align(ic, LV_ALIGN_LEFT_MID, 8, 0);
+
+        lv_obj_set_width(lb, w - 42);
+        lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);
+        lv_obj_align(lb, LV_ALIGN_LEFT_MID, 34, 0);
+    } else {
+        lv_obj_center(lb);
+    }
+}
+
+void ui_menu_show_2col(const char *title, const ui_menu_item_t *items, int count,
+                       ui_menu_cb_t cb, void *arg)
+{
+    if (items == NULL || count <= 0 || count > UI_MENU_MAX_ITEMS) {
+        return;
+    }
+
+    ui_alert_close();
+    if (s_menu_mask != NULL && lv_obj_is_valid(s_menu_mask)) {
+        lv_obj_delete(s_menu_mask);
+    }
+
+    lv_obj_t *mask = mask_create();
+    if (mask == NULL) {
+        return;
+    }
+
+    s_menu_mask = mask;
+    s_menu_cb   = cb;
+    s_menu_arg  = arg;
+    lv_obj_add_event_cb(mask, menu_del_cb, LV_EVENT_DELETE, NULL);
+    lv_obj_add_event_cb(mask, menu_blank_cb, LV_EVENT_CLICKED, NULL);
+
+    const lv_coord_t cell_w = (MENU_2COL_W - MENU_2COL_MARGIN * 2 - MENU_2COL_GAP) / 2;
+    const int item_rows = (count + 1) / 2;
+    const lv_coord_t panel_h = MENU_TITLE_H
+        + (lv_coord_t)item_rows * (MENU_2COL_ITEM_H + MENU_2COL_GAP)
+        + MENU_2COL_ITEM_H + 8;
+    lv_obj_t *box = panel_create(mask, MENU_2COL_W, panel_h);
+
+    if (title != NULL && title[0] != '\0') {
+        lv_obj_t *ttl = lv_label_create(box);
+        lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
+        lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT_DIM, 0);
+        lv_obj_set_width(ttl, MENU_2COL_W - 24);
+        lv_label_set_long_mode(ttl, LV_LABEL_LONG_DOT);
+        lv_label_set_text(ttl, title);
+        lv_obj_align(ttl, LV_ALIGN_TOP_MID, 0, 10);
+    }
+
+    for (int i = 0; i < count; i++) {
+        int row = i / 2;
+        int col = i % 2;
+        lv_coord_t x = MENU_2COL_MARGIN + col * (cell_w + MENU_2COL_GAP);
+        lv_coord_t y = MENU_TITLE_H + row * (MENU_2COL_ITEM_H + MENU_2COL_GAP);
+        menu_add_cell(box, x, y, cell_w, &items[i], i, menu_item_cb, false);
+    }
+
+    const ui_menu_item_t cancel = { "取消", NULL };
+    lv_coord_t cancel_y = MENU_TITLE_H + item_rows * (MENU_2COL_ITEM_H + MENU_2COL_GAP);
+    menu_add_cell(box, MENU_2COL_MARGIN, cancel_y,
+                  MENU_2COL_W - MENU_2COL_MARGIN * 2, &cancel, -1,
+                  menu_item_cb, true);
 }
 
 /* ===================== 长文本层 ===================== */
