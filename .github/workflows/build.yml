@@ -14,8 +14,13 @@ jobs:
       - uses: actions/checkout@v4
 
       # 复用仓库里的 sdkconfig（目标 esp32c5、PSRAM、分区表都在里面）
+      # 注意：Jobs container 会覆盖镜像 entrypoint，IDF 环境不会自动加载，
+      # 必须自己 source 一次，否则 idf.py 不在 PATH 里（exit code 127）
       - name: Build firmware
-        run: idf.py --no-ccache build
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py --no-ccache build
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
