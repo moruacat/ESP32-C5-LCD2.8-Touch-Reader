@@ -633,7 +633,9 @@ static void on_auto_sec_pick(int idx, void *arg)
 static void auto_sec_menu_show(void)
 {
     ui_menu_item_t items[AUTO_SEC_N];
-    char texts[AUTO_SEC_N][16];
+    /* 16 字节装不下 "15 秒 · 当前"（中文字符 3 字节），GCC 的
+     * -Wformat-truncation 会直接报错，这里按最大值留够 */
+    char texts[AUTO_SEC_N][24];
 
     for (int i = 0; i < AUTO_SEC_N; i++) {
         if (s_auto_choices[i] == s_auto_sec) {
@@ -766,7 +768,8 @@ static void on_reader_long(lv_event_t *e)
     items[n].icon = &ic_play;
     s_menu_act[n++] = ACT_AUTO;
 
-    static char sec_text[20];
+    /* 间隔最大 600，加上「翻页间隔」「秒」共约 21 字节，留足余量 */
+    static char sec_text[32];
     snprintf(sec_text, sizeof(sec_text), "翻页间隔 %d 秒", s_auto_sec);
     items[n].text = sec_text;
     items[n].icon = &ic_timer;
