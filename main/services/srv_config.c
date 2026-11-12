@@ -94,6 +94,8 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_READ_PARA_SP,    read_para_space,  0,      0, 40),
     /* 阅读器里默认允许自动变暗，想安安静静看书可以关掉 */
     I32(CFG_READ_KEEP_BRIGHT, read_keep_bright, 0,     0, 1),
+    /* 自动翻页面板里的档位是 10/15/20/30/60，范围放宽一些，手改配置也吃得下 */
+    I32(CFG_READ_AUTO_SEC,    read_auto_sec,   15,     5, 600),
     /* 书架按最近阅读排序：越后读的越靠前 */
     I32(CFG_SHELF_RECENT,    shelf_recent,      CFG_DEF_SHELF_RECENT, 0, 1),
 

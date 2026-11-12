@@ -881,10 +881,13 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg)
 
 /* ===================== 操作菜单 ===================== */
 
-#define MENU_PANEL_W   240
-#define MENU_TITLE_H   34
-#define MENU_ITEM_H    36
-#define MENU_ITEM_GAP  4
+/* 阅读器菜单要放 5 项（封面/简介/跳转/自动翻页/翻页时长），屏幕只有 240 高，
+ * 按原来的行高算 34 + 5*(36+4) + 36 + 8 = 278 会溢出。这里把面板加宽、
+ * 行高收紧一点：28 + 5*(30+3) + 30 + 8 = 231，仍留出手指可点的余量。 */
+#define MENU_PANEL_W   268
+#define MENU_TITLE_H   28
+#define MENU_ITEM_H    30
+#define MENU_ITEM_GAP  3
 
 static void menu_del_cb(lv_event_t *e)
 {
