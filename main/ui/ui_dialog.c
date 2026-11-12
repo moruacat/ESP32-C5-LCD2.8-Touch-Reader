@@ -66,7 +66,7 @@ static lv_obj_t *mask_create(void)
     lv_obj_t *mask = lv_obj_create(scr);
     lv_obj_remove_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(mask, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(mask, ui_scr_w(), ui_scr_h());
     lv_obj_set_pos(mask, 0, 0);
     lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(mask, LV_OPA_50, 0);
@@ -218,12 +218,12 @@ void ui_dialog_confirm(const char *title, const char *note, const char *ok_text,
     s_ok_cb  = ok_cb;
     s_ok_arg = arg;
 
-    lv_obj_t *box = panel_create(mask, 244, 134);
+    lv_obj_t *box = panel_create(mask, (ui_scr_w() < 252) ? (ui_scr_w() - 8) : 244, 134);
     add_text(box, title, UI_COLOR_TEMP, 18, 1);
     add_text(box, note, UI_COLOR_TEXT_DIM, 46, 2);
 
     /* 取消仍在右侧、保持原来的主色；真正执行动作的按钮改成红色警示。 */
-    lv_coord_t w = (244 - 36) / 2;
+    lv_coord_t w = (lv_obj_get_width(box) - 36) / 2;
     if (w > 96) {
         w = 96;
     }
@@ -290,7 +290,7 @@ void ui_alert_show(const char *title, lv_color_t title_color, const char *note,
     s_alert_cb   = cb;
     s_alert_arg  = arg;
 
-    lv_obj_t *box = panel_create(mask, 236, 142);
+    lv_obj_t *box = panel_create(mask, (ui_scr_w() < 244) ? (ui_scr_w() - 8) : 236, 142);
     add_text(box, title, title_color, 22, 1);
     add_text(box, note, UI_COLOR_TEXT_DIM, 52, 2);
 
@@ -553,13 +553,13 @@ void ui_number_input_show_ex(const char *title, int min_value, int max_value,
     s_num_cancel_arg = cancel_arg;
     lv_obj_add_event_cb(mask, num_del_cb, LV_EVENT_DELETE, NULL);
 
-    lv_obj_t *box = panel_create(mask, UI_SCREEN_W - 16, NUM_PANEL_H);
+    lv_obj_t *box = panel_create(mask, ui_scr_w() - 16, NUM_PANEL_H);
     lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *ttl = lv_label_create(box);
     lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
     lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT, 0);
-    lv_obj_set_width(ttl, 160);
+    lv_obj_set_width(ttl, lv_obj_get_width(box) - 130);
     lv_label_set_long_mode(ttl, LV_LABEL_LONG_DOT);
     lv_label_set_text(ttl, (title != NULL) ? title : "输入数值");
     lv_obj_align(ttl, LV_ALIGN_TOP_LEFT, 10, 5);
@@ -600,7 +600,7 @@ void ui_number_input_show_ex(const char *title, int min_value, int max_value,
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_max_length(ta, NUM_TEXT_MAX);
     lv_textarea_set_accepted_chars(ta, "0123456789+-");
-    lv_obj_set_size(ta, UI_SCREEN_W - 16 - 20, 26);
+    lv_obj_set_size(ta, ui_scr_w() - 16 - 20, 26);
     lv_obj_align(ta, LV_ALIGN_BOTTOM_LEFT, 10, -7);
     lv_obj_set_style_bg_color(ta, UI_COLOR_BG, 0);
     lv_obj_set_style_border_width(ta, 0, 0);
@@ -617,7 +617,7 @@ void ui_number_input_show_ex(const char *title, int min_value, int max_value,
     lv_textarea_set_cursor_pos(ta, LV_TEXTAREA_CURSOR_LAST);
 
     lv_obj_t *kb = lv_keyboard_create(mask);
-    lv_obj_set_size(kb, UI_SCREEN_W - 16, NUM_KB_H);
+    lv_obj_set_size(kb, ui_scr_w() - 16, NUM_KB_H);
     lv_obj_align(kb, LV_ALIGN_TOP_MID, 0, NUM_KB_TOP);
     lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(kb, 0, 0);
@@ -802,14 +802,14 @@ void ui_text_input_show_init(const char *title, uint32_t max_len, const char *in
     lv_obj_add_event_cb(mask, input_del_cb, LV_EVENT_DELETE, NULL);
 
     /* 顶部：标题 + 取消 + 输入框 */
-    lv_obj_t *box = panel_create(mask, UI_SCREEN_W - 16, 66);
+    lv_obj_t *box = panel_create(mask, ui_scr_w() - 16, 66);
     lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *ttl = lv_label_create(box);
     lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
     lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT, 0);
     lv_label_set_text(ttl, (title != NULL) ? title : "");
-    lv_obj_set_width(ttl, 216);
+    lv_obj_set_width(ttl, lv_obj_get_width(box) - 76);
     lv_label_set_long_mode(ttl, LV_LABEL_LONG_DOT);
     lv_obj_align(ttl, LV_ALIGN_TOP_LEFT, 10, 6);
 
@@ -849,7 +849,7 @@ void ui_text_input_show_init(const char *title, uint32_t max_len, const char *in
     lv_obj_t *ta = lv_textarea_create(box);
     lv_textarea_set_one_line(ta, true);         /* 单行：不打回车，只滚动显示 */
     lv_textarea_set_max_length(ta, max_len);
-    lv_obj_set_size(ta, UI_SCREEN_W - 16 - 20, 26);
+    lv_obj_set_size(ta, ui_scr_w() - 16 - 20, 26);
     lv_obj_align(ta, LV_ALIGN_BOTTOM_LEFT, 10, -7);
     lv_obj_set_style_bg_color(ta, UI_COLOR_BG, 0);
     lv_obj_set_style_border_width(ta, 0, 0);
@@ -868,7 +868,7 @@ void ui_text_input_show_init(const char *title, uint32_t max_len, const char *in
     }
 
     lv_obj_t *kb = lv_keyboard_create(mask);
-    lv_obj_set_size(kb, UI_SCREEN_W - 16, INPUT_KB_H);
+    lv_obj_set_size(kb, ui_scr_w() - 16, INPUT_KB_H);
     lv_obj_align(kb, LV_ALIGN_TOP_MID, 0, INPUT_KB_TOP);
     lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(kb, 0, 0);
@@ -1026,14 +1026,14 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg)
     lv_obj_add_event_cb(mask, pass_del_cb, LV_EVENT_DELETE, NULL);
 
     /* 顶部：标题 + 取消 + 密码圆点 */
-    lv_obj_t *box = panel_create(mask, UI_SCREEN_W - 16, 66);
+    lv_obj_t *box = panel_create(mask, ui_scr_w() - 16, 66);
     lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *ttl = lv_label_create(box);
     lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
     lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT, 0);
     lv_label_set_text(ttl, (title != NULL) ? title : "输入密码");
-    lv_obj_set_width(ttl, 216);
+    lv_obj_set_width(ttl, lv_obj_get_width(box) - 76);
     lv_label_set_long_mode(ttl, LV_LABEL_LONG_DOT);
     lv_obj_align(ttl, LV_ALIGN_TOP_LEFT, 10, 6);
 
@@ -1086,7 +1086,7 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg)
     };
     lv_buttonmatrix_set_map(kb, map);
     lv_buttonmatrix_set_ctrl_map(kb, ctrl);
-    lv_obj_set_size(kb, UI_SCREEN_W - 16, 152);
+    lv_obj_set_size(kb, ui_scr_w() - 16, 152);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, -6);
     lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(kb, 0, 0);
@@ -1110,7 +1110,7 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg)
 
 /* 普通单列菜单沿用紧凑行高，5 项仍能放进 240 高屏幕；
  * 阅读器那种 5 项长按菜单改用下面的 ui_menu_show_2col()，不再压扁按钮。 */
-#define MENU_PANEL_W   268
+#define MENU_PANEL_W   ((ui_scr_w() > 276) ? 268 : (ui_scr_w() - 8))
 #define MENU_TITLE_H   28
 #define MENU_ITEM_H    30
 #define MENU_ITEM_GAP  3
@@ -1249,7 +1249,7 @@ void ui_menu_show(const char *title, const ui_menu_item_t *items, int count,
 
 /* ===================== 两列操作菜单 ===================== */
 
-#define MENU_2COL_W       312
+#define MENU_2COL_W       ((ui_scr_w() > 320) ? 312 : (ui_scr_w() - 8))
 #define MENU_2COL_MARGIN  6
 #define MENU_2COL_GAP     4
 #define MENU_2COL_ITEM_H  34
@@ -1351,8 +1351,8 @@ void ui_menu_show_2col(const char *title, const ui_menu_item_t *items, int count
 
 /* 简介可能上千字节，面板能给多大给多大：整屏减去一圈 8px 边距。
  * 原来只有 280x196（正文区 110px ≈ 6 行），看一段几百字的简介要滑半天。 */
-#define INFO_PANEL_W   (UI_SCREEN_W - 16)
-#define INFO_PANEL_H   (UI_SCREEN_H - 16)
+#define INFO_PANEL_W   (ui_scr_w() - 16)
+#define INFO_PANEL_H   (ui_scr_h() - 16)
 #define INFO_TITLE_Y   4
 #define INFO_TITLE_H   26      /* 标题一行（含行高余量），正文从它下面开始 */
 #define INFO_BODY_TOP  INFO_TITLE_H
@@ -1471,8 +1471,8 @@ void ui_cover_show(uint8_t *data, size_t bytes, int32_t w, int32_t h)
 
     /* 转 90° 之后，图像的视觉宽 = 原图高、视觉高 = 原图宽，缩放要按这个算。
      * 封面通常比屏幕小，所以允许放大到铺满（全屏看图，不做「小图不放大」）。 */
-    uint32_t sx = (uint32_t)(((int64_t)UI_SCREEN_W * 256) / h);
-    uint32_t sy = (uint32_t)(((int64_t)UI_SCREEN_H * 256) / w);
+    uint32_t sx = (uint32_t)(((int64_t)ui_scr_w() * 256) / h);
+    uint32_t sy = (uint32_t)(((int64_t)ui_scr_h() * 256) / w);
     uint32_t scale = (sx < sy) ? sx : sy;
     if (scale == 0) {
         scale = 1;

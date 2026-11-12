@@ -138,9 +138,20 @@ static lv_obj_t *page_build(app_page_id_t page)
     return scr;
 }
 
-/* 创建并切换页面（调用前必须已持有 LVGL 锁） */
-static void switch_locked(app_page_id_t page, nav_anim_t anim)
+static bool page_can_rotate(app_page_id_t page)
 {
+    return page == PAGE_BOOKSHELF || page == PAGE_MUSIC;
+}
+
+/* 创建并切换页面（调用前必须已持有 LVGL 锁）。
+ * preserve_rotation=true 只用于「旋转当前可旋转页面后原地重建」；
+ * 普通切页必须先恢复横屏，否则阅读器、设置等固定横屏页面会按竖屏尺寸构建而错位。 */
+static void switch_locked_ex(app_page_id_t page, nav_anim_t anim, bool preserve_rotation)
+{
+    if (!preserve_rotation && bsp_display_get_rotation() != 0) {
+        (void)bsp_display_set_rotation(0);
+    }
+
     lv_obj_t *scr = page_build(page);
     if (scr == NULL) {
         ESP_LOGE(TAG, "页面 %d 创建失败", (int)page);
@@ -167,6 +178,11 @@ static void switch_locked(app_page_id_t page, nav_anim_t anim)
     }
 
     s_current = page;
+}
+
+static void switch_locked(app_page_id_t page, nav_anim_t anim)
+{
+    switch_locked_ex(page, anim, false);
 }
 
 void app_navigator_init(void)
@@ -237,6 +253,28 @@ void app_navigator_hide(void)
     }
     s_depth = 0;
     switch_locked(PAGE_CLOCK, ANIM_FROM_LEFT);
+    bsp_display_unlock();
+}
+
+void app_navigator_toggle_page_rotation(void)
+{
+    if (!page_can_rotate(s_current)) {
+        return;
+    }
+    if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) != ESP_OK) {
+        ESP_LOGE(TAG, "获取 LVGL 锁失败，页面旋转未执行");
+        return;
+    }
+
+    uint16_t next = (bsp_display_get_rotation() == 0) ? 90 : 0;
+    esp_err_t ret = bsp_display_set_rotation(next);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "页面 %d 旋转到 %u°", (int)s_current, (unsigned)next);
+        switch_locked_ex(s_current, ANIM_NONE, true);
+    } else {
+        ESP_LOGE(TAG, "页面旋转失败: %s", esp_err_to_name(ret));
+    }
+
     bsp_display_unlock();
 }
 

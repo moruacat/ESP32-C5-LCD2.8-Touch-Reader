@@ -103,6 +103,14 @@ void app_navigator_hide(void);
 app_page_id_t app_navigator_current(void);
 
 /**
+ * @brief 在书架/音乐页切换横屏/竖屏
+ *
+ * 只对 PAGE_BOOKSHELF、PAGE_MUSIC 生效。旋转后会原地重建当前页面；
+ * 切换到其他页面时导航器会自动恢复 0° 横屏。
+ */
+void app_navigator_toggle_page_rotation(void);
+
+/**
  * @brief 当前页面的上一页（返回栈顶）；栈空时返回 PAGE_CLOCK
  *
  * 用于「同一个页面从不同入口进来要显示不同内容」的场景，

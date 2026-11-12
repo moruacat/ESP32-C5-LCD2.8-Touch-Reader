@@ -240,7 +240,7 @@ static lv_obj_t *ime_mask_create(void)
     lv_obj_t *mask = lv_obj_create(scr);
     lv_obj_remove_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(mask, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(mask, ui_scr_w(), ui_scr_h());
     lv_obj_set_pos(mask, 0, 0);
     lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(mask, LV_OPA_70, 0);    /* 底下压着整块键盘，太亮会抢注意力 */
@@ -256,7 +256,7 @@ static void ime_panel_create(lv_obj_t *mask, const char *title, uint32_t max_len
 {
     lv_obj_t *box = lv_obj_create(mask);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(box, UI_SCREEN_W - 16, 66);
+    lv_obj_set_size(box, ui_scr_w() - 16, 66);
     lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 4);
     lv_obj_set_style_bg_color(box, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_border_width(box, 0, 0);
@@ -268,7 +268,7 @@ static void ime_panel_create(lv_obj_t *mask, const char *title, uint32_t max_len
     lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
     lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT, 0);
     lv_label_set_text(ttl, (title != NULL) ? title : "");
-    lv_obj_set_width(ttl, 216);
+    lv_obj_set_width(ttl, lv_obj_get_width(box) - 76);
     lv_label_set_long_mode(ttl, LV_LABEL_LONG_DOT);
     lv_obj_align(ttl, LV_ALIGN_TOP_LEFT, 10, 6);
 
@@ -291,7 +291,7 @@ static void ime_panel_create(lv_obj_t *mask, const char *title, uint32_t max_len
     lv_obj_t *ta = lv_textarea_create(box);
     lv_textarea_set_one_line(ta, true);         /* 单行：不打回车，只滚动显示 */
     lv_textarea_set_max_length(ta, max_len);
-    lv_obj_set_size(ta, UI_SCREEN_W - 16 - 20, 26);
+    lv_obj_set_size(ta, ui_scr_w() - 16 - 20, 26);
     lv_obj_align(ta, LV_ALIGN_BOTTOM_LEFT, 10, -7);
     lv_obj_set_style_bg_color(ta, UI_COLOR_BG, 0);
     lv_obj_set_style_border_width(ta, 0, 0);

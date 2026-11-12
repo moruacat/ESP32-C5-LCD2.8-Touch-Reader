@@ -30,12 +30,23 @@ void ui_common_init(void)
 
 /* ===================== 页面骨架 ===================== */
 
+lv_coord_t ui_scr_w(void)
+{
+    return lv_display_get_horizontal_resolution(NULL);
+}
+
+lv_coord_t ui_scr_h(void)
+{
+    return lv_display_get_vertical_resolution(NULL);
+}
+
 lv_obj_t *ui_page_root_create(lv_obj_t *parent)
 {
     lv_obj_t *root = lv_obj_create(parent);
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
-    /* 显式像素尺寸：不要用 LV_PCT，父对象是 screen，百分比解析不可靠 */
-    lv_obj_set_size(root, UI_SCREEN_W, UI_SCREEN_H);
+    /* 显式像素尺寸：不要用 LV_PCT，父对象是 screen，百分比解析不可靠。
+     * 运行时旋转后必须取当前 LVGL 逻辑分辨率，不能再用 320x240 常量。 */
+    lv_obj_set_size(root, ui_scr_w(), ui_scr_h());
     lv_obj_set_pos(root, 0, 0);
     lv_obj_set_style_bg_color(root, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);      /* 必须不透明，否则旧界面会透出来 */
@@ -81,8 +92,10 @@ void ui_slide_in_dir(lv_obj_t *obj, ui_slide_dir_t dir)
     }
 
     const bool vertical = (dir == UI_SLIDE_FROM_BOTTOM);
-    const lv_coord_t start = vertical ? UI_SCREEN_H
-                                      : ((dir == UI_SLIDE_FROM_RIGHT) ? UI_SCREEN_W : -UI_SCREEN_W);
+    const lv_coord_t sw = ui_scr_w();
+    const lv_coord_t sh = ui_scr_h();
+    const lv_coord_t start = vertical ? sh
+                                      : ((dir == UI_SLIDE_FROM_RIGHT) ? sw : -sw);
 
     if (vertical) {
         lv_obj_set_style_translate_y(obj, start, 0);
@@ -255,6 +268,30 @@ static void titlebar_label_del_cb(lv_event_t *e)
     }
 }
 
+lv_obj_t *ui_titlebar_button_create(lv_obj_t *bar, const char *text,
+                                    lv_coord_t right_ofs, lv_coord_t w,
+                                    lv_event_cb_t cb, void *arg)
+{
+    lv_obj_t *btn = lv_button_create(bar);
+    lv_obj_set_size(btn, w, 22);
+    lv_obj_align(btn, LV_ALIGN_RIGHT_MID, right_ofs, 0);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_style_bg_color(btn, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    ui_add_click_feedback(btn);
+    if (cb != NULL) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, arg);
+    }
+
+    lv_obj_t *lb = lv_label_create(btn);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
+    lv_label_set_text(lb, text ? text : "");
+    lv_obj_center(lb);
+    return btn;
+}
+
 /**
  * @brief 标题栏骨架
  * @param with_clock 右侧显示 HH:MM（普通页）；false 时右侧空出来给调用方放按钮（游戏页）
@@ -265,7 +302,7 @@ static lv_obj_t *titlebar_build(lv_obj_t *parent, const char *title,
 {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(bar, UI_SCREEN_W, UI_TITLEBAR_H);
+    lv_obj_set_size(bar, ui_scr_w(), UI_TITLEBAR_H);
     lv_obj_set_pos(bar, 0, 0);
     lv_obj_set_style_bg_color(bar, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
@@ -306,7 +343,7 @@ static lv_obj_t *titlebar_build(lv_obj_t *parent, const char *title,
     /* 文字必须在限宽之后仍居中：label 宽度是写死的（为了不被长标题顶出去），
      * 默认左对齐的话短标题会紧贴左边，看着整体偏左。 */
     lv_obj_set_style_text_align(ttl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(ttl, UI_SCREEN_W - (with_clock ? 112 : 84));   /* 让开两侧按钮/时钟 */
+    lv_obj_set_width(ttl, ui_scr_w() - (with_clock ? 112 : 84));   /* 让开两侧按钮/时钟 */
     lv_obj_set_height(ttl, (lv_coord_t)lv_font_get_line_height(&font_ui_14) + 2);
     lv_obj_align(ttl, LV_ALIGN_CENTER, 0, 0);
     /* 标题文字塞在 bar 的 user_data 里，ui_titlebar_set_title() 靠它改字。
@@ -479,7 +516,10 @@ void ui_volume_popup_show(void)
 
     s_vol_pop = lv_obj_create(lv_screen_active());
     lv_obj_remove_flag(s_vol_pop, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_vol_pop, UI_SCREEN_W, UI_SCREEN_H);
+    const lv_coord_t pop_w = ui_scr_w();
+    const lv_coord_t pop_h = ui_scr_h();
+    const lv_coord_t box_w = (pop_w > 280) ? 260 : (pop_w - 20);
+    lv_obj_set_size(s_vol_pop, pop_w, pop_h);
     lv_obj_set_pos(s_vol_pop, 0, 0);
     lv_obj_set_style_bg_color(s_vol_pop, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_vol_pop, LV_OPA_50, 0);
@@ -492,7 +532,7 @@ void ui_volume_popup_show(void)
     lv_obj_t *box = lv_obj_create(s_vol_pop);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);    /* 吃掉点击，别穿透到遮罩 */
-    lv_obj_set_size(box, 260, 84);
+    lv_obj_set_size(box, box_w, 84);
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
@@ -516,7 +556,7 @@ void ui_volume_popup_show(void)
     lv_obj_align(s_vol_pop_val, LV_ALIGN_TOP_RIGHT, -14, 8);
 
     lv_obj_t *sl = lv_slider_create(box);
-    lv_obj_set_size(sl, 220, 10);
+    lv_obj_set_size(sl, box_w - 40, 10);
     lv_obj_align(sl, LV_ALIGN_BOTTOM_MID, 0, -18);
     lv_slider_set_range(sl, 0, 100);
     lv_slider_set_value(sl, srv_audio_get_volume(), LV_ANIM_OFF);
@@ -549,7 +589,7 @@ lv_obj_t *ui_settings_list_create(lv_obj_t *root)
      * 纵向拖动滚列表，横向滑动仍然由页面手势接管（右滑返回）。 */
     lv_obj_t *list = lv_obj_create(root);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
-    lv_obj_set_size(list, UI_SCREEN_W, UI_SCREEN_H - UI_TITLEBAR_H);
+    lv_obj_set_size(list, ui_scr_w(), ui_scr_h() - UI_TITLEBAR_H);
     lv_obj_set_pos(list, 0, UI_TITLEBAR_H);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);

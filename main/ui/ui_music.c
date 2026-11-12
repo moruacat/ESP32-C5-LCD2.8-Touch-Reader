@@ -17,22 +17,13 @@
 
 static const char *TAG = "ui_music";
 
-/* ===================== 布局（横屏 320x240） ===================== */
+/* ===================== 布局 ===================== */
+/* 主页面尺寸由 music_layout_init() 按当前逻辑分辨率计算，横竖屏共用。 */
 
-#define PAGE_LIST_X   8
-#define PAGE_LIST_W   304
-#define PAGE_LIST_Y   30
-#define PAGE_LIST_H   124
 #define ROW_H         32      /* 行高按手指点得中来做，别压到 22 那种 */
 #define ROW_PAD       8
 
-#define NAME_Y        158
-#define BAR_Y         174
-#define TIME_Y        184
-
-#define BTN_Y         200
 #define BTN_H         36
-#define BTN_W         57      /* 5 个键排一排：(304 - 4*4) / 5 */
 #define BTN_GAP       4
 
 #define TICK_MS       200
@@ -53,8 +44,20 @@ static const char *const PL_TAB_TEXT[SRV_MUSIC_LIST_MAX] = {
 /* ===================== 主页面状态 ===================== */
 
 static lv_obj_t  *s_list      = NULL;
+static lv_obj_t  *s_root      = NULL;
 static int         s_queue_len = 0;
 static lv_obj_t  **s_rows      = NULL;   /* 列表项（高亮用） */
+
+/* 当前逻辑屏幕下的主页面布局：横屏/竖屏都由 music_layout_init() 计算。 */
+static lv_coord_t s_list_x   = 8;
+static lv_coord_t s_list_y   = 30;
+static lv_coord_t s_list_w   = 304;
+static lv_coord_t s_list_h   = 124;
+static lv_coord_t s_name_y   = 158;
+static lv_coord_t s_bar_y    = 174;
+static lv_coord_t s_time_y   = 184;
+static lv_coord_t s_btn_y    = 200;
+static lv_coord_t s_btn_w    = 57;
 
 static lv_obj_t  *s_name_lb = NULL;
 static lv_obj_t  *s_pos_lb  = NULL;
@@ -100,6 +103,25 @@ static void ensure_ready(void)
     if (srv_player_playlist_id() == 0 && srv_musiclib_playlist_count() > 0) {
         (void)srv_player_set_playlist(srv_musiclib_playlist_id(0));
     }
+}
+
+static void music_layout_init(void)
+{
+    const lv_coord_t sw = ui_scr_w();
+    const lv_coord_t sh = ui_scr_h();
+
+    s_list_x = 8;
+    s_list_y = 30;
+    s_list_w = sw - s_list_x * 2;
+    s_btn_y = sh - 42;
+    s_list_h = s_btn_y - s_list_y - 50;
+    if (s_list_h < 80) {
+        s_list_h = 80;
+    }
+    s_name_y = s_list_y + s_list_h + 4;
+    s_bar_y = s_name_y + 18;
+    s_time_y = s_bar_y + 10;
+    s_btn_w = (s_list_w - BTN_GAP * 4) / 5;
 }
 
 /* ===================== 主页面：曲目列表 ===================== */
@@ -194,7 +216,7 @@ static void rebuild_list(void)
 
         lv_obj_t *row = lv_obj_create(s_list);
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(row, PAGE_LIST_W - 8, ROW_H - 2);
+        lv_obj_set_size(row, s_list_w - 8, ROW_H - 2);
         lv_obj_set_pos(row, 0, (lv_coord_t)(i * ROW_H));
         lv_obj_set_style_bg_color(row, UI_COLOR_SURFACE, 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
@@ -208,7 +230,7 @@ static void rebuild_list(void)
         lv_obj_t *lb = lv_label_create(row);
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
         lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
-        lv_obj_set_width(lb, PAGE_LIST_W - 40);
+        lv_obj_set_width(lb, s_list_w - 40);
         /* 长曲名循环滚动，别折行（行高只有 30，折行会盖住下一行） */
         lv_label_set_long_mode(lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
         lv_obj_set_style_anim_duration(lb, 6000, 0);
@@ -224,7 +246,7 @@ static void rebuild_list(void)
 
     int cur = srv_player_index();
     if (cur > 0 && cur < n) {
-        lv_obj_scroll_to_y(s_list, (lv_coord_t)(cur * ROW_H - PAGE_LIST_H / 2), LV_ANIM_OFF);
+        lv_obj_scroll_to_y(s_list, (lv_coord_t)(cur * ROW_H - s_list_h / 2), LV_ANIM_OFF);
     }
     set_row_hl(cur, true);
 }
@@ -280,8 +302,8 @@ static lv_obj_t *make_btn(lv_obj_t *parent, lv_coord_t x,
                           const lv_image_dsc_t *icon, lv_event_cb_t cb, bool upside_down)
 {
     lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_set_size(btn, BTN_W, BTN_H);
-    lv_obj_set_pos(btn, x, BTN_Y);
+    lv_obj_set_size(btn, s_btn_w, BTN_H);
+    lv_obj_set_pos(btn, x, s_btn_y);
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_bg_color(btn, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
@@ -351,10 +373,14 @@ static void on_vol_open(lv_event_t *e)
         return;
     }
 
+    const lv_coord_t sw = ui_scr_w();
+    const lv_coord_t sh = ui_scr_h();
+    const lv_coord_t box_w = (sw > 280) ? 260 : (sw - 20);
+
     /* 半透明遮罩：点空白处关掉 */
     s_vol = lv_obj_create(lv_screen_active());
     lv_obj_remove_flag(s_vol, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_vol, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(s_vol, sw, sh);
     lv_obj_set_pos(s_vol, 0, 0);
     lv_obj_set_style_bg_color(s_vol, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_vol, LV_OPA_50, 0);
@@ -367,7 +393,7 @@ static void on_vol_open(lv_event_t *e)
     lv_obj_t *box = lv_obj_create(s_vol);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);    /* 吃掉点击，别穿透到遮罩 */
-    lv_obj_set_size(box, 260, 84);
+    lv_obj_set_size(box, box_w, 84);
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
@@ -391,7 +417,7 @@ static void on_vol_open(lv_event_t *e)
     lv_obj_align(s_vol_val, LV_ALIGN_TOP_RIGHT, -14, 8);
 
     lv_obj_t *sl = lv_slider_create(box);
-    lv_obj_set_size(sl, 220, 10);
+    lv_obj_set_size(sl, box_w - 40, 10);
     lv_obj_align(sl, LV_ALIGN_BOTTOM_MID, 0, -18);
     lv_slider_set_range(sl, 0, 100);
     lv_slider_set_value(sl, srv_audio_get_volume(), LV_ANIM_OFF);
@@ -430,7 +456,7 @@ static void panel_close(void)
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_panel);
     lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)panel_anim_cb);
-    lv_anim_set_values(&a, 0, UI_SCREEN_W);
+    lv_anim_set_values(&a, 0, ui_scr_w());
     lv_anim_set_duration(&a, PN_ANIM_MS);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
     lv_anim_set_completed_cb(&a, panel_closed_cb);
@@ -715,7 +741,7 @@ static void panel_refresh(void)
     }
 
     const srv_music_t *playing = srv_player_current();
-    const lv_coord_t   col_w   = UI_SCREEN_W - PN_BAR_W;
+    const lv_coord_t   col_w   = ui_scr_w() - PN_BAR_W;
 
     for (int i = 0; i < n; i++) {
         const srv_music_t *m = NULL;
@@ -793,9 +819,12 @@ static void pick_open(void)
         return;
     }
 
+    const lv_coord_t sw = ui_scr_w();
+    const lv_coord_t sh = ui_scr_h();
+
     s_pick = lv_obj_create(lv_screen_active());
     lv_obj_remove_flag(s_pick, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_pick, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(s_pick, sw, sh);
     lv_obj_set_pos(s_pick, 0, 0);
     lv_obj_set_style_bg_color(s_pick, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_pick, LV_OPA_COVER, 0);
@@ -810,11 +839,11 @@ static void pick_open(void)
     lv_obj_set_style_text_font(tip, &font_ui_14, 0);
     lv_obj_set_style_text_color(tip, UI_COLOR_TEXT_DIM, 0);
     lv_label_set_text(tip, "点曲目即加入，可重复添加");
-    lv_obj_set_pos(tip, PAGE_LIST_X + 2, UI_TITLEBAR_H + 2);
+    lv_obj_set_pos(tip, s_list_x + 2, UI_TITLEBAR_H + 2);
 
     lv_obj_t *list = lv_obj_create(s_pick);
-    lv_obj_set_size(list, PAGE_LIST_W, UI_SCREEN_H - UI_TITLEBAR_H - 26);
-    lv_obj_set_pos(list, PAGE_LIST_X, UI_TITLEBAR_H + 20);
+    lv_obj_set_size(list, sw - 16, sh - UI_TITLEBAR_H - 26);
+    lv_obj_set_pos(list, 8, UI_TITLEBAR_H + 20);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_pad_all(list, 0, 0);
@@ -838,7 +867,7 @@ static void pick_open(void)
 
         lv_obj_t *row = lv_obj_create(list);
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(row, PAGE_LIST_W - 8, ROW_H - 4);
+        lv_obj_set_size(row, sw - 24, ROW_H - 4);
         lv_obj_set_pos(row, 0, (lv_coord_t)(i * (ROW_H - 2)));
         lv_obj_set_style_bg_color(row, UI_COLOR_SURFACE, 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
@@ -851,7 +880,7 @@ static void pick_open(void)
         lv_obj_t *lb = lv_label_create(row);
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
         lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
-        lv_obj_set_width(lb, PAGE_LIST_W - 60);
+        lv_obj_set_width(lb, sw - 76);
         lv_label_set_long_mode(lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
         lv_obj_set_style_anim_duration(lb, 6000, 0);
         lv_label_set_text(lb, m->name);
@@ -915,10 +944,12 @@ static void panel_open(void)
     }
 
     s_pn_closing = false;
+    const lv_coord_t sw = ui_scr_w();
+    const lv_coord_t sh = ui_scr_h();
 
     s_panel = lv_obj_create(lv_screen_active());
     lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_panel, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(s_panel, sw, sh);
     lv_obj_set_pos(s_panel, 0, 0);
     lv_obj_set_style_bg_color(s_panel, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -934,7 +965,7 @@ static void panel_open(void)
 
     /* ---- 顶部标签页 ---- */
     s_pn_tabs = lv_obj_create(s_panel);
-    lv_obj_set_size(s_pn_tabs, UI_SCREEN_W, PN_TAB_H);
+    lv_obj_set_size(s_pn_tabs, sw, PN_TAB_H);
     lv_obj_set_pos(s_pn_tabs, 0, 0);
     lv_obj_set_style_bg_color(s_pn_tabs, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_bg_opa(s_pn_tabs, LV_OPA_COVER, 0);
@@ -949,7 +980,7 @@ static void panel_open(void)
     /* ---- 左边功能栏 ---- */
     lv_obj_t *bar = lv_obj_create(s_panel);
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(bar, PN_BAR_W, UI_SCREEN_H - PN_TAB_H);
+    lv_obj_set_size(bar, PN_BAR_W, sh - PN_TAB_H);
     lv_obj_set_pos(bar, 0, PN_TAB_H);
     lv_obj_set_style_bg_color(bar, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
@@ -995,7 +1026,7 @@ static void panel_open(void)
 
     /* ---- 右边曲目竖列 ---- */
     s_pn_col = lv_obj_create(s_panel);
-    lv_obj_set_size(s_pn_col, UI_SCREEN_W - PN_BAR_W, UI_SCREEN_H - PN_TAB_H);
+    lv_obj_set_size(s_pn_col, sw - PN_BAR_W, sh - PN_TAB_H);
     lv_obj_set_pos(s_pn_col, PN_BAR_W, PN_TAB_H);
     lv_obj_set_style_bg_opa(s_pn_col, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_pn_col, 0, 0);
@@ -1007,13 +1038,13 @@ static void panel_open(void)
     panel_refresh();
 
     /* ---- 从右往左滑入 ---- */
-    lv_obj_set_style_translate_x(s_panel, UI_SCREEN_W, 0);
+    lv_obj_set_style_translate_x(s_panel, sw, 0);
 
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_panel);
     lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)panel_anim_cb);
-    lv_anim_set_values(&a, UI_SCREEN_W, 0);
+    lv_anim_set_values(&a, sw, 0);
     lv_anim_set_duration(&a, PN_ANIM_MS);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
     lv_anim_start(&a);
@@ -1049,7 +1080,7 @@ static void music_tick(lv_timer_t *timer)
         snprintf(s_last_name, sizeof(s_last_name), "%s", name);
         lv_label_set_text(s_name_lb, name[0] ? name : "未选择曲目");
         if (idx >= 0 && s_rows != NULL) {
-            lv_obj_scroll_to_y(s_list, (lv_coord_t)(idx * ROW_H - PAGE_LIST_H / 2), LV_ANIM_OFF);
+            lv_obj_scroll_to_y(s_list, (lv_coord_t)(idx * ROW_H - s_list_h / 2), LV_ANIM_OFF);
         }
     }
 
@@ -1083,6 +1114,13 @@ static void on_root_del(lv_event_t *e)
         lv_timer_delete(t);
     }
 
+    /* 原地旋转会先建新 root，再异步删旧 root。旧 root 的删除回调只能
+     * 清它自己的 timer，不能把新页面的静态指针和播放状态一起清掉。 */
+    if (lv_event_get_target(e) != s_root) {
+        return;
+    }
+    s_root = NULL;
+
     /* 不是「后台播放」退出的，就把音乐停掉并释放音频通道 */
     if (!s_background_exit && srv_player_state() != SRV_PLAYER_IDLE) {
         (void)srv_player_stop();
@@ -1112,14 +1150,24 @@ static void on_root_del(lv_event_t *e)
 
 /* ===================== 页面 ===================== */
 
+static void on_rotate_clicked(lv_event_t *e)
+{
+    (void)e;
+    app_navigator_toggle_page_rotation();
+}
+
 void ui_music_create(lv_obj_t *root)
 {
+    s_root = root;
+    music_layout_init();
+
     s_background_exit = false;      /* 上一轮的退出标记不能带进来 */
     s_play_icon_pause = false;      /* 播放键初始挂的是「播放」图标 */
     s_last_idx = -2;
     s_last_name[0] = '\0';
 
-    ui_titlebar_create(root, "音乐", app_navigator_back_smart_cb, NULL);
+    lv_obj_t *bar = ui_titlebar_create_plain(root, "音乐", app_navigator_back_smart_cb, NULL);
+    ui_titlebar_button_create(bar, "旋转", -8, 52, on_rotate_clicked, NULL);
 
     /* 时段静音：只在「本来没在放音乐」时判定。后台已经在放（进页只是看看列表/
      * 换歌），一进门把音量压到 0 会突然没声，不符合手机的使用习惯。 */
@@ -1131,8 +1179,8 @@ void ui_music_create(lv_obj_t *root)
 
     /* 曲目列表 */
     s_list = lv_obj_create(root);
-    lv_obj_set_size(s_list, PAGE_LIST_W, PAGE_LIST_H);
-    lv_obj_set_pos(s_list, PAGE_LIST_X, PAGE_LIST_Y);
+    lv_obj_set_size(s_list, s_list_w, s_list_h);
+    lv_obj_set_pos(s_list, s_list_x, s_list_y);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
@@ -1143,16 +1191,16 @@ void ui_music_create(lv_obj_t *root)
     s_name_lb = lv_label_create(root);
     lv_obj_set_style_text_font(s_name_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_name_lb, UI_COLOR_TEXT, 0);
-    lv_obj_set_width(s_name_lb, PAGE_LIST_W);
-    lv_obj_set_pos(s_name_lb, PAGE_LIST_X, NAME_Y);
+    lv_obj_set_width(s_name_lb, s_list_w);
+    lv_obj_set_pos(s_name_lb, s_list_x, s_name_y);
     lv_label_set_long_mode(s_name_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_anim_duration(s_name_lb, 6000, 0);
     lv_label_set_text(s_name_lb, "未选择曲目");
 
     /* 进度条 */
     s_slider = lv_slider_create(root);
-    lv_obj_set_size(s_slider, PAGE_LIST_W, 8);
-    lv_obj_set_pos(s_slider, PAGE_LIST_X, BAR_Y);
+    lv_obj_set_size(s_slider, s_list_w, 8);
+    lv_obj_set_pos(s_slider, s_list_x, s_bar_y);
     lv_slider_set_range(s_slider, 0, 1);
     lv_slider_set_value(s_slider, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_slider, UI_COLOR_SURFACE, LV_PART_MAIN);
@@ -1167,23 +1215,23 @@ void ui_music_create(lv_obj_t *root)
     lv_obj_set_style_text_font(s_pos_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_pos_lb, UI_COLOR_TEXT_DIM, 0);
     lv_label_set_text(s_pos_lb, "00:00");
-    lv_obj_set_pos(s_pos_lb, PAGE_LIST_X, TIME_Y);
+    lv_obj_set_pos(s_pos_lb, s_list_x, s_time_y);
 
     s_dur_lb = lv_label_create(root);
     lv_obj_set_style_text_font(s_dur_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_dur_lb, UI_COLOR_TEXT_DIM, 0);
     lv_label_set_text(s_dur_lb, "--:--");
-    lv_obj_align(s_dur_lb, LV_ALIGN_TOP_RIGHT, -PAGE_LIST_X, TIME_Y);
+    lv_obj_align(s_dur_lb, LV_ALIGN_TOP_RIGHT, -s_list_x, s_time_y);
 
     /* 控制键：上一曲 / 播放暂停 / 下一曲 / 音量 / 播放列表
      * （停止只在时钟页那条后台播放控制条上） */
-    const lv_coord_t step = BTN_W + BTN_GAP;
-    (void)make_btn(root, PAGE_LIST_X, &ic_prev, on_prev, false);
+    const lv_coord_t step = s_btn_w + BTN_GAP;
+    (void)make_btn(root, s_list_x, &ic_prev, on_prev, false);
 
     /* 播放/暂停键：主色实心，图标要随状态换，所以单独建 */
     lv_obj_t *play_btn = lv_button_create(root);
-    lv_obj_set_size(play_btn, BTN_W, BTN_H);
-    lv_obj_set_pos(play_btn, PAGE_LIST_X + step, BTN_Y);
+    lv_obj_set_size(play_btn, s_btn_w, BTN_H);
+    lv_obj_set_pos(play_btn, s_list_x + step, s_btn_y);
     lv_obj_set_style_radius(play_btn, 8, 0);
     lv_obj_set_style_bg_color(play_btn, UI_COLOR_PRIMARY, 0);
     lv_obj_set_style_shadow_width(play_btn, 0, 0);
@@ -1197,9 +1245,9 @@ void ui_music_create(lv_obj_t *root)
     lv_obj_set_style_radius(s_play_ic, 0, 0);
     lv_obj_center(s_play_ic);
 
-    (void)make_btn(root, PAGE_LIST_X + step * 2, &ic_prev, on_next, true);
-    (void)make_btn(root, PAGE_LIST_X + step * 3, &ic_volume, on_vol_open, false);
-    (void)make_btn(root, PAGE_LIST_X + step * 4, &ic_list, on_open_panel, false);
+    (void)make_btn(root, s_list_x + step * 2, &ic_prev, on_next, true);
+    (void)make_btn(root, s_list_x + step * 3, &ic_volume, on_vol_open, false);
+    (void)make_btn(root, s_list_x + step * 4, &ic_list, on_open_panel, false);
 
     rebuild_list();
     music_tick(NULL);

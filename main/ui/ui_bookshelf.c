@@ -16,10 +16,11 @@
 static const char *TAG = "ui_shelf";
 
 #define MARGIN     8
-#define CARD_W     148
 #define CARD_H     96
 #define CARD_GAP   8
-#define COL_NUM    2
+
+static lv_coord_t s_card_w = 148;
+static int        s_cols   = 2;
 
 /* 长按菜单里的动作。菜单项是按书的情况动态拼的（TXT 没有封面/简介、
  * 只有外部书籍能移出），所以光靠回调里的下标认不出点的是哪一项，
@@ -207,13 +208,13 @@ static void on_book_long(lv_event_t *e)
 
 static void add_card(lv_obj_t *list, const srv_book_t *bk, int idx)
 {
-    int col = idx % COL_NUM;
-    int row = idx / COL_NUM;
+    int col = idx % s_cols;
+    int row = idx / s_cols;
 
     lv_obj_t *card = lv_obj_create(list);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(card, CARD_W, CARD_H);
-    lv_obj_set_pos(card, MARGIN + col * (CARD_W + CARD_GAP),
+    lv_obj_set_size(card, s_card_w, CARD_H);
+    lv_obj_set_pos(card, MARGIN + col * (s_card_w + CARD_GAP),
                    MARGIN + row * (CARD_H + CARD_GAP));
     lv_obj_set_style_bg_color(card, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
@@ -227,7 +228,7 @@ static void add_card(lv_obj_t *list, const srv_book_t *bk, int idx)
      * 整体前移，指针指向的内容就不是这本书了 */
     lv_obj_add_event_cb(card, on_book_long, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)idx);
 
-    const lv_coord_t inner_w = CARD_W - 16;     /* 卡片左右各 8 的内边距 */
+    const lv_coord_t inner_w = s_card_w - 16;   /* 卡片左右各 8 的内边距 */
 
     /* 第一行：左边格式图标，右边类型文字。
      * 类型原来是压在卡片底部占一整行的，挪到图标右边之后，下面腾出来的
@@ -282,6 +283,12 @@ static void add_card(lv_obj_t *list, const srv_book_t *bk, int idx)
 }
 
 /* ===================== 页面 ===================== */
+
+static void on_rotate_clicked(lv_event_t *e)
+{
+    (void)e;
+    app_navigator_toggle_page_rotation();
+}
 
 /* 列表内容（空态或卡片）。抽出来是为了移出书架后能整块重建 */
 static char s_filter[SRV_BOOK_NAME_MAX];
@@ -388,31 +395,24 @@ static void on_search_clicked(lv_event_t *e)
 
 void ui_bookshelf_create(lv_obj_t *root)
 {
-    ui_titlebar_create_plain(root, "书架", app_navigator_back_smart_cb, NULL);
+    const lv_coord_t sw = ui_scr_w();
+    const lv_coord_t sh = ui_scr_h();
+
+    /* 横屏双列，竖屏单列。卡片宽度跟着可用宽度算，避免竖屏只显示半张卡。 */
+    s_cols = (sw < sh) ? 1 : 2;
+    s_card_w = (sw - MARGIN * 2 - (s_cols - 1) * CARD_GAP) / s_cols;
+
+    lv_obj_t *bar = ui_titlebar_create_plain(root, "书架", app_navigator_back_smart_cb, NULL);
+    ui_titlebar_button_create(bar, "旋转", -8, 44, on_rotate_clicked, NULL);
+    ui_titlebar_button_create(bar, "搜索", -56, 44, on_search_clicked, NULL);
 
     /* 每次进书架都重扫：最近阅读排序开关可能刚改过 */
     (void)srv_library_scan();
 
-    /* 右上角搜索按钮（plain 标题栏右侧不显示时间，位置不会被挤） */
-    lv_obj_t *search = lv_button_create(root);
-    lv_obj_set_size(search, 56, 24);
-    lv_obj_set_pos(search, UI_SCREEN_W - 62, 4);
-    lv_obj_set_style_radius(search, 6, 0);
-    lv_obj_set_style_bg_color(search, UI_COLOR_SURFACE, 0);
-    lv_obj_set_style_shadow_width(search, 0, 0);
-    lv_obj_set_style_pad_all(search, 0, 0);
-    ui_add_click_feedback(search);
-    lv_obj_add_event_cb(search, on_search_clicked, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *search_lb = lv_label_create(search);
-    lv_obj_set_style_text_font(search_lb, &font_ui_14, 0);
-    lv_obj_set_style_text_color(search_lb, UI_COLOR_TEXT, 0);
-    lv_label_set_text(search_lb, "搜索");
-    lv_obj_center(search_lb);
-
     /* 列表容器：书架比一屏长，要能纵向滚 */
     lv_obj_t *list = lv_obj_create(root);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
-    lv_obj_set_size(list, UI_SCREEN_W, UI_SCREEN_H - UI_TITLEBAR_H);
+    lv_obj_set_size(list, sw, sh - UI_TITLEBAR_H);
     lv_obj_set_pos(list, 0, UI_TITLEBAR_H);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);
