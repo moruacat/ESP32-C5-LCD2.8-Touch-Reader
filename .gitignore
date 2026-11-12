@@ -28,6 +28,7 @@ dict/dict.csv.bak
 sim/sd/dict/dict.dat
 sim/sd/dict/dict.idx
 sim/sd/dict/dict.csv.bak
+sim/sd/dict/variants.idx
 
 # ===== 本地环境 =====
 tools/venv/

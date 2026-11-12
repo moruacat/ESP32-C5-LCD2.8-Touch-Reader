@@ -3393,13 +3393,9 @@ CONFIG_MBEDTLS_HAVE_TIME=y
 # CONFIG_MBEDTLS_PLATFORM_TIME_ALT is not set
 # default:
 # CONFIG_MBEDTLS_HAVE_TIME_DATE is not set
-# default:
-CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y
-# default:
-# CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is not set
-# default:
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC is not set
-# default:
 # CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC is not set
 # default:
 CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
@@ -4154,6 +4150,15 @@ CONFIG_ADC_BUTTON_SAMPLE_TIMES=1
 # end of IoT Button
 
 #
+# cJSON
+#
+# default:
+CONFIG_CJSON_NESTING_LIMIT=1000
+# default:
+CONFIG_CJSON_CIRCULAR_LIMIT=10000
+# end of cJSON
+
+#
 # CMake Utilities
 #
 # default:
@@ -4330,6 +4335,49 @@ CONFIG_MMAP_FILE_NAME_LENGTH=16
 # end of mmap file support format
 
 #
+# ESP WebSocket client
+#
+# default:
+# CONFIG_ESP_WS_CLIENT_ENABLE_DYNAMIC_BUFFER is not set
+# default:
+# CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK is not set
+# end of ESP WebSocket client
+
+#
+# Xiaozhi Assistant
+#
+CONFIG_XIAOZHI_OTA_URL="https://api.tenclass.net/xiaozhi/ota/"
+# default:
+CONFIG_XIAOZHI_INFO_TIMEOUT_MS=30000
+# default:
+CONFIG_XIAOZHI_INFO_BUFFER_SIZE=4096
+# default:
+CONFIG_XIAOZHI_INFO_MAX_RESPONSE_SIZE=8192
+# CONFIG_XIAOZHI_SYNC_SYSTEM_TIME_FROM_SERVER is not set
+
+#
+# Xiaozhi Chat Audio
+#
+# default:
+CONFIG_XIAOZHI_UDP_RECEIVE_BUFFER_SIZE=2048
+# default:
+CONFIG_XIAOZHI_UDP_MAX_AUDIO_PAYLOAD_SIZE=1400
+# default:
+CONFIG_XIAOZHI_MAX_CONSECUTIVE_UDP_ERRORS=10
+# default:
+CONFIG_XIAOZHI_HELLO_MESSAGE_SIZE=1024
+# default:
+CONFIG_XIAOZHI_AUDIO_TASK_CORE=-1
+# default:
+CONFIG_XIAOZHI_AUDIO_TASK_PRIORITY=5
+CONFIG_XIAOZHI_AUDIO_TASK_STACK_SIZE=16384
+# CONFIG_XIAOZHI_AUDIO_TASK_ALLOC_STATIC is not set
+CONFIG_XIAOZHI_AUDIO_TASK_ALLOC_DYNAMIC=y
+CONFIG_XIAOZHI_STACK_IN_PSRAM=y
+# end of Xiaozhi Chat Audio
+# end of Xiaozhi Assistant
+
+#
 # IOT Knob
 #
 # default:
@@ -4348,6 +4396,92 @@ CONFIG_KNOB_LOW_LIMIT=-1000
 # default:
 CONFIG_LIBPNG_PREFER_PSRAM=y
 # end of libpng
+
+#
+# Model Context Protocol
+#
+# default:
+CONFIG_MCP_TRANSPORT_HTTP_SERVER=y
+# default:
+CONFIG_MCP_HTTP_SSE_ENABLE=y
+# default:
+CONFIG_MCP_HTTP_SSE_MAX_CLIENTS=4
+# default:
+CONFIG_MCP_HTTP_SSE_QUEUE_LEN=32
+# default:
+CONFIG_MCP_HTTP_SSE_REPLAY_DEPTH=128
+# default:
+CONFIG_MCP_HTTP_SSE_TASK_STACK_SIZE=4096
+# default:
+CONFIG_MCP_HTTP_SSE_HEARTBEAT_MS=15000
+# default:
+CONFIG_MCP_HTTP_SESSION_TTL_MS=600000
+# default:
+CONFIG_MCP_RESOURCE_SUBSCRIPTIONS_MAX=64
+# default:
+CONFIG_MCP_HTTP_DEFAULT_PROTOCOL_VERSION="2025-03-26"
+# default:
+# CONFIG_MCP_HTTP_CORS_ENABLE is not set
+# default:
+# CONFIG_MCP_HTTP_AUTH_ENABLE is not set
+# default:
+CONFIG_MCP_HTTP_OAUTH_METADATA_ENABLE=y
+# default:
+CONFIG_MCP_HTTP_OAUTH_ISSUER="https://example.local"
+# default:
+CONFIG_MCP_HTTP_OAUTH_JWKS_URI="https://example.local/.well-known/jwks.json"
+# default:
+CONFIG_MCP_HTTP_OAUTH_AUTH_SERVER="https://example.local"
+# default:
+CONFIG_MCP_HTTP_OAUTH_AUTHORIZATION_ENDPOINT="https://example.local/oauth/authorize"
+# default:
+CONFIG_MCP_HTTP_OAUTH_TOKEN_ENDPOINT="https://example.local/oauth/token"
+# default:
+CONFIG_MCP_HTTP_OAUTH_REGISTRATION_ENDPOINT="https://example.local/oauth/register"
+# default:
+CONFIG_MCP_HTTP_OAUTH_RESOURCE="mcp://esp32"
+# default:
+CONFIG_MCP_TRANSPORT_HTTP_CLIENT=y
+# default:
+CONFIG_MCP_TOOLCALL_STACK_SIZE=8192
+# default:
+CONFIG_MCP_TOOLLIST_MAX_SIZE=8192
+# default:
+CONFIG_MCP_TASK_POLL_INTERVAL_MS=1000
+# default:
+CONFIG_MCP_TASKS_LIST_MAX_COUNT=100
+# end of Model Context Protocol
+
+#
+# ESP-MQTT Configurations
+#
+# default:
+CONFIG_MQTT_PROTOCOL_311=y
+# default:
+# CONFIG_MQTT_PROTOCOL_5 is not set
+# default:
+CONFIG_MQTT_TRANSPORT_SSL=y
+# default:
+CONFIG_MQTT_TRANSPORT_WEBSOCKET=y
+# default:
+CONFIG_MQTT_TRANSPORT_WEBSOCKET_SECURE=y
+# default:
+# CONFIG_MQTT_MSG_ID_INCREMENTAL is not set
+# default:
+# CONFIG_MQTT_SKIP_PUBLISH_IF_DISCONNECTED is not set
+# default:
+# CONFIG_MQTT_REPORT_DELETED_MESSAGES is not set
+# default:
+# CONFIG_MQTT_USE_CUSTOM_CONFIG is not set
+# default:
+# CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED is not set
+# default:
+# CONFIG_MQTT_BUFFERS_ON_EXTERNAL_MEMORY is not set
+# default:
+# CONFIG_MQTT_TASK_STACK_ON_EXTERNAL_MEMORY is not set
+# default:
+# CONFIG_MQTT_CUSTOM_OUTBOX is not set
+# end of ESP-MQTT Configurations
 
 #
 # zlib Configurations

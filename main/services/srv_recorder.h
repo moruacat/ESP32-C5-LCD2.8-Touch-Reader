@@ -18,7 +18,8 @@ esp_err_t srv_recorder_init(void);
  * @brief 开始录音
  *
  * 文件自动命名成 `/record/rec-<序号>.wav`（序号取目录里已有的最大值 +1），
- * 目录不存在会自动创建。停止或写满上限后 wav 头会被回填成真实长度。
+ * 目录不存在会自动创建。单个文件最长一小时，到点自动切到下一个序号继续录
+ * （录音不中断）。停止后 wav 头会被回填成真实长度。
  */
 esp_err_t srv_recorder_start(void);
 

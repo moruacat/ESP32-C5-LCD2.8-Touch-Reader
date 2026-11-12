@@ -4,6 +4,7 @@
 #include "ui_dialog.h"
 #include "app_navigator.h"
 #include "srv_config.h"
+#include "srv_safe.h"
 #include "srv_sd.h"
 #include "srv_wifi.h"
 #include "srv_library.h"
@@ -101,12 +102,42 @@ static void on_reset_click(lv_event_t *e)
                       "重置", on_reset_ok, NULL);
 }
 
+/* ---- 快速返回主页 / 安全模式（从设置主页挪过来） ---- */
+
+static void on_fast_home_switch(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    srv_config_set_int(CFG_FAST_HOME, on ? 1 : 0, true);
+}
+
+static void on_safe_switch(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    const bool want = lv_obj_has_state(sw, LV_STATE_CHECKED);
+
+    if (want == srv_safe_on()) {
+        return;                     /* 程序同步状态时触发的，不是用户改的 */
+    }
+
+    const bool on = srv_safe_toggle();
+    ui_alert_show(on ? "安全模式已开启（重启后保持）" : "安全模式已关闭",
+                  on ? UI_COLOR_OK : UI_COLOR_TEXT_DIM,
+                  on ? "阅读 / 音乐 / 文件 / 照片密码\n快速返回主页 已收起"
+                     : "普通设置恢复完整",
+                  "知道了", NULL, NULL, on ? 3200 : 1800);
+}
+
 /* ===================== 页面 ===================== */
 
 void ui_set_about_create(lv_obj_t *root)
 {
     ui_titlebar_create(root, "关于", app_navigator_back_cb, NULL);
     lv_obj_t *list = ui_settings_list_create(root);
+
+    /* 只有「安全菜单 → 完整版设置 → 关于」这条路才显示安全模式开关，
+     * 普通设置的关于页保持隐藏（安全模式入口不应该随便露出来） */
+    const bool show_safe = (app_navigator_prev() == PAGE_SETTINGS_FULL);
 
     lv_obj_t *row = ui_row_create(list, UI_ROW_Y(0), &ic_SD, "SD 卡");
     s_sd_lb = ui_row_value_create(row, -12, 90);
@@ -122,8 +153,18 @@ void ui_set_about_create(lv_obj_t *root)
     row = ui_row_create(list, UI_ROW_Y(3), NULL, "重载 SD 卡");
     ui_row_btn_create(row, -8, 64, "重载", on_remount_click, NULL);
 
+    row = ui_row_create(list, UI_ROW_Y(4), &ic_home, "快速返回主页");
+    (void)ui_row_switch_create(row, srv_config_get_int(CFG_FAST_HOME, CFG_DEF_FAST_HOME) != 0,
+                              on_fast_home_switch, NULL);
+
+    int next = 5;
+    if (show_safe) {
+        row = ui_row_create(list, UI_ROW_Y(next++), &ic_warning, "安全模式");
+        (void)ui_row_switch_create(row, srv_safe_on(), on_safe_switch, NULL);
+    }
+
     /* 危险操作：文字标红，点了还要再确认一次 */
-    row = ui_row_create(list, UI_ROW_Y(4), &ic_warning, "重置全部设置");
+    row = ui_row_create(list, UI_ROW_Y(next), &ic_warning, "重置全部设置");
     lv_obj_t *lb = ui_row_btn_create(row, -8, 64, "重置", on_reset_click, NULL);
     lv_obj_set_style_text_color(lb, UI_COLOR_TEMP, 0);
 

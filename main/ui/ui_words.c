@@ -16,7 +16,12 @@
 /* ===================== 布局 ===================== */
 #define SEARCH_X     8
 #define SEARCH_Y     (UI_TITLEBAR_H + 4)
-#define SEARCH_W     (UI_SCREEN_W - SEARCH_X * 2)
+/* 搜索框右侧让出两个小按钮：「变形」「学习」 */
+#define ENTRY_W      48
+#define ENTRY_H      32
+#define ENTRY_STUDY_X (UI_SCREEN_W - SEARCH_X - ENTRY_W)
+#define ENTRY_FORM_X  (ENTRY_STUDY_X - ENTRY_W - 4)
+#define SEARCH_W     (ENTRY_FORM_X - SEARCH_X - 4)
 #define SEARCH_H     32
 
 #define BODY_X       8
@@ -843,6 +848,12 @@ static lv_obj_t *make_tab(lv_obj_t *root, lv_coord_t x, const char *text, lv_eve
     return btn;
 }
 
+static void on_entry_clicked(lv_event_t *e)
+{
+    app_page_id_t page = (app_page_id_t)(intptr_t)lv_event_get_user_data(e);
+    app_navigator_switch(page, true);
+}
+
 void ui_words_create(lv_obj_t *root)
 {
     s_mode = 0;
@@ -855,6 +866,34 @@ void ui_words_create(lv_obj_t *root)
     ui_titlebar_create_plain(root, "单词", app_navigator_back_cb, NULL);
     s_tab_word  = make_tab(root, TAB_WORD_X,  "查词", on_tab_word);
     s_tab_trans = make_tab(root, TAB_TRANS_X, "译",   on_tab_trans);
+
+    /* 搜索框右侧两个入口：变形查询 / 单词学习 */
+    static const struct {
+        const char   *text;
+        lv_coord_t    x;
+        app_page_id_t page;
+    } entries[] = {
+        {"变形", ENTRY_FORM_X,  PAGE_WORD_FORMS},
+        {"学习", ENTRY_STUDY_X, PAGE_WORD_STUDY},
+    };
+    for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
+        lv_obj_t *b = lv_button_create(root);
+        lv_obj_set_size(b, ENTRY_W, ENTRY_H);
+        lv_obj_set_pos(b, entries[i].x, SEARCH_Y);
+        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_set_style_bg_color(b, UI_COLOR_SURFACE, 0);
+        lv_obj_set_style_shadow_width(b, 0, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        ui_add_click_feedback(b);
+        lv_obj_add_event_cb(b, on_entry_clicked, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)entries[i].page);
+
+        lv_obj_t *bl = lv_label_create(b);
+        lv_obj_set_style_text_font(bl, &font_ui_14, 0);
+        lv_obj_set_style_text_color(bl, UI_COLOR_TEXT, 0);
+        lv_label_set_text(bl, entries[i].text);
+        lv_obj_center(bl);
+    }
 
     /* ===== 搜索框（点它弹屏幕键盘） ===== */
     lv_obj_t *box = lv_button_create(root);

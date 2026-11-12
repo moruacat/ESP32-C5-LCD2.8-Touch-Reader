@@ -19,6 +19,7 @@ void ui_set_read_create(lv_obj_t *root);     /*!< 阅读 */
 void ui_set_music_create(lv_obj_t *root);    /*!< 音乐 */
 void ui_set_bright_create(lv_obj_t *root);   /*!< 亮度 */
 void ui_set_battery_create(lv_obj_t *root);  /*!< 电池 */
+void ui_set_photo_create(lv_obj_t *root);    /*!< 照片（照片密码） */
 void ui_set_about_create(lv_obj_t *root);    /*!< 关于 */
 
 #ifdef __cplusplus

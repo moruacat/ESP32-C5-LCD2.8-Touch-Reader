@@ -67,6 +67,28 @@ void srv_audio_pcm_close(void);
 
 bool srv_audio_pcm_is_open(void);
 
+/* ===================== 麦克风（录音机 / 语音助手共用） ===================== */
+
+/**
+ * @brief 打开麦克风通路（ES8311 ADC 方向）
+ *
+ * 与扬声器是全双工，但麦克风同一时刻只允许一个使用者（录音机或小智）。
+ * 已经打开时返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t srv_audio_mic_open(int sample_rate, int channels, int bits);
+
+/**
+ * @brief 读一块 PCM
+ *
+ * 注意返回值语义跟 esp_codec_dev_read 一致：成功是 **0**（不是读到的字节数），
+ * 失败是负数。按约定的块长读满才算一次成功。
+ */
+int srv_audio_mic_read(void *data, int bytes);
+
+void srv_audio_mic_close(void);
+
+bool srv_audio_mic_is_open(void);
+
 /* ===================== 提示音 ===================== */
 
 /**

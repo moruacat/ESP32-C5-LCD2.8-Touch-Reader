@@ -1129,8 +1129,11 @@ static bool goto_build_chapters(lv_obj_t *box)
         lv_obj_t *lb = lv_label_create(row);
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
         lv_obj_set_style_text_color(lb, UI_COLOR_TEXT_DIM, 0);
-        lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);   /* 长章名省略号收尾 */
+        /* 长章名循环滚动看全称（行高只有一行，折行会压到下一行） */
+        lv_label_set_long_mode(lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        lv_obj_set_style_anim_duration(lb, 6000, 0);
         lv_obj_set_width(lb, GOTO_LIST_W - 12);
+        lv_obj_set_height(lb, font_ui_14.line_height);
         lv_label_set_text(lb, "");
         lv_obj_align(lb, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -1254,6 +1257,8 @@ static void reader_titlebar_ensure(lv_obj_t *root, const char *title)
 {
     if (s_titlebar == NULL) {
         s_titlebar = ui_titlebar_create(root, title, app_navigator_back_cb, NULL);
+        /* 阅读器的章名/书名不滚动：正文就在下面，标题一直动会分心 */
+        ui_titlebar_set_scroll(s_titlebar, false);
     }
 }
 
@@ -1628,8 +1633,6 @@ static void reader_build_content(lv_obj_t *root)
 
     /* 长按正文 → 阅读菜单（查看封面 / 查看简介 / 跳转章节页码） */
     lv_obj_add_event_cb(root, on_reader_long, LV_EVENT_LONG_PRESSED, NULL);
-
-    lv_obj_add_event_cb(root, reader_root_del_cb, LV_EVENT_DELETE, NULL);
 }
 
 /**
@@ -1666,6 +1669,11 @@ static void reader_resume(lv_obj_t *root)
 
 void ui_reader_create(lv_obj_t *root)
 {
+    /* 清理回调必须无条件挂上：加载中也可能退出（例如点完书就按返回），
+     * 而定时器不会随页面对象一起销毁 —— 不在入口挂，加载完成时
+     * open_poll_cb 会拿着已经释放的 root / 等待层去操作，直接崩。 */
+    lv_obj_add_event_cb(root, reader_root_del_cb, LV_EVENT_DELETE, NULL);
+
     if (!srv_reader_busy() && !srv_reader_is_open()) {
         ui_titlebar_create(root, "阅读", app_navigator_back_cb, NULL);
         lv_obj_t *lb = lv_label_create(root);

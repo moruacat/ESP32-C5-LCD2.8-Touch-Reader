@@ -12,8 +12,11 @@
 #include "ui_recorder.h"
 #include "ui_photos.h"
 #include "ui_words.h"
+#include "ui_word_forms.h"
+#include "ui_word_study.h"
 #include "ui_files.h"
 #include "ui_radio.h"
+#include "ui_ai.h"
 #include "ui_calendar.h"
 #include "ui_safe_menu.h"
 #include "ui_bookshelf.h"
@@ -54,6 +57,7 @@ static const app_page_ops_t s_page_ops[PAGE_MAX] = {
     [PAGE_SET_BRIGHT] = {.build = ui_set_bright_create},
     [PAGE_SET_ABOUT] = {.build = ui_set_about_create},
     [PAGE_SET_BATTERY] = {.build = ui_set_battery_create},
+    [PAGE_SET_PHOTO] = {.build = ui_set_photo_create},
     [PAGE_FILES]     = {.build = ui_files_create},
     [PAGE_CALENDAR]  = {.build = ui_calendar_create},
     [PAGE_SAFE_MENU] = {.build = ui_safe_menu_create},
@@ -63,7 +67,10 @@ static const app_page_ops_t s_page_ops[PAGE_MAX] = {
     [PAGE_RECORDER]  = {.build = ui_recorder_create},
     [PAGE_PHOTOS]    = {.build = ui_photos_create},
     [PAGE_WORDS]     = {.build = ui_words_create},
+    [PAGE_WORD_FORMS] = {.build = ui_word_forms_create},
+    [PAGE_WORD_STUDY] = {.build = ui_word_study_create},
     [PAGE_RADIO]     = {.build = ui_radio_create},
+    [PAGE_AI]        = {.build = ui_ai_create},
     [PAGE_BOOKSHELF] = {.build = ui_bookshelf_create},
     [PAGE_READER]    = {.build = ui_reader_create},
     [PAGE_MUSIC]     = {.build = ui_music_create},
@@ -235,6 +242,11 @@ void app_navigator_hide(void)
 app_page_id_t app_navigator_current(void)
 {
     return s_current;
+}
+
+app_page_id_t app_navigator_prev(void)
+{
+    return (s_depth > 0) ? s_stack[s_depth - 1] : PAGE_CLOCK;
 }
 
 void app_navigator_back_cb(lv_event_t *e)

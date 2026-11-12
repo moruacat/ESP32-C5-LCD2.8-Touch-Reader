@@ -551,10 +551,11 @@ static void build_row(lv_obj_t *parent, int idx, lv_coord_t y)
     lv_obj_set_style_text_color(nm, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(nm, &font_ui_14, 0);
     lv_obj_set_width(nm, 200);
-    /* 高度必须限成一行：只设宽 + LONG_DOT 时，label 会按整段文字自己撑高，
-     * 结果折成两行被行高裁掉（书名一长就露馅） */
+    /* 高度必须限成一行：只设宽 + 长文本模式下，label 会按整段文字自己撑高，
+     * 结果折成两行被行高裁掉（书名一长就露馅）。长文件名循环滚动看全称。 */
     lv_obj_set_height(nm, font_ui_14.line_height);
-    lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(nm, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(nm, 6000, 0);
     lv_label_set_text(nm, it->name);
     lv_obj_align(nm, LV_ALIGN_LEFT_MID, 36, 0);
 

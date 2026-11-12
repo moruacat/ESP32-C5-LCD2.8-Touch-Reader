@@ -17,6 +17,7 @@ idf_component_register(
         "ui/ui_set_bright.c"
         "ui/ui_set_about.c"
         "ui/ui_set_battery.c"
+        "ui/ui_set_photo.c"
         "ui/ui_files.c"
         "ui/ui_calendar.c"
         "ui/ui_safe_menu.c"
@@ -29,10 +30,13 @@ idf_component_register(
         "ui/ui_recorder.c"
         "ui/ui_photos.c"
         "ui/ui_words.c"
+        "ui/ui_word_forms.c"
+        "ui/ui_word_study.c"
         "ui/ui_radio.c"
         "ui/ui_bookshelf.c"
         "ui/ui_reader.c"
         "ui/ui_music.c"
+        "ui/ui_ai.c"
         "ui/ui_games.c"
         "ui/ui_game_2048.c"
         "ui/ui_game_snake.c"
@@ -55,6 +59,7 @@ idf_component_register(
         "services/srv_progress.c"
         "services/srv_dict.c"
         "services/srv_dict_zh.c"
+        "services/srv_wordbook.c"
         "services/srv_library.c"
         "services/srv_recent.c"
         "services/srv_musiclib.c"
@@ -65,6 +70,8 @@ idf_component_register(
         "services/srv_battery.c"
         "services/srv_safe.c"
         "services/srv_reader.c"
+        "services/srv_ai.c"
+        "services/srv_ai_tools.c"
         "assets/gbk_table.c"
         "assets/fonts/font_ui_14.c"
         "assets/fonts/font_ipa_14.c"
@@ -96,6 +103,8 @@ idf_component_register(
         esp_audio_codec
         esp_lvgl_adapter
         lvgl
+        esp_xiaozhi
+        mcp-c-sdk
     PRIV_REQUIRES
         # ★ main 自己的一堆 services/srv_*.c 和 ui/ui_sleep.c 直接用 esp_timer，
         #   但这条依赖以前是靠别的组件传递带进来的：传递链一变（比如这次换 lvgl 包）

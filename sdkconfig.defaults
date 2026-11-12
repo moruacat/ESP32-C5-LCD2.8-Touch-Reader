@@ -46,3 +46,18 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 # ===== 字体 =====
 # font_ui_14 的位图超过 1MB，20 位 bitmap_index 寻址不够，必须开大格式索引
 CONFIG_LV_FONT_FMT_TXT_LARGE=y
+
+# ===== 小智 AI =====
+# 官方服务地址（组件默认值，写出来方便以后换自建服务器）
+CONFIG_XIAOZHI_OTA_URL="https://api.tenclass.net/xiaozhi/ota/"
+# 系统时间统一由 srv_ntp / RTC 管，禁止组件拿服务端时间改系统时钟
+CONFIG_XIAOZHI_SYNC_SYSTEM_TIME_FROM_SERVER=n
+# mbedTLS 的分配改走 PSRAM：小智 HTTPS 握手在内部 RAM 里会分配失败
+# （mbedtls_ssl_setup 返回 -0x8D = PSA_ERROR_INSUFFICIENT_MEMORY）
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# 组件音频任务栈：回调里要跑 Opus 解码，8192 偏紧；放 PSRAM 省内部 RAM
+CONFIG_XIAOZHI_AUDIO_TASK_STACK_SIZE=16384
+# CONFIG_XIAOZHI_AUDIO_TASK_ALLOC_STATIC is not set
+CONFIG_XIAOZHI_AUDIO_TASK_ALLOC_DYNAMIC=y
+CONFIG_XIAOZHI_STACK_IN_PSRAM=y
+

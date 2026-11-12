@@ -132,6 +132,22 @@ lv_obj_t *ui_titlebar_create_plain(lv_obj_t *parent, const char *title,
 void ui_titlebar_set_title(lv_obj_t *bar, const char *title);
 
 /**
+ * @brief 开关标题的循环滚动（默认开）
+ *
+ * 阅读器和游戏页关掉：标题常驻视野里，一直滚会分心，
+ * 关掉后长标题按省略号收尾。
+ */
+void ui_titlebar_set_scroll(lv_obj_t *bar, bool on);
+
+/**
+ * @brief 弹出音量调节层（半透明遮罩 + 滑条，点空白处关闭）
+ *
+ * 挂在当前屏幕上，切页时随屏幕一起销毁；同一时刻只会有一个。
+ * 调用前需已持有 LVGL 锁（普通页面回调里本来就在锁内）。
+ */
+void ui_volume_popup_show(void);
+
+/**
  * @brief 卡片：圆角面板 + 图标 + 文字，带按下反馈
  */
 lv_obj_t *ui_card_create(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,

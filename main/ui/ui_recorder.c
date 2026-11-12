@@ -21,8 +21,14 @@ static void rec_update(void)
     bool    on  = srv_recorder_is_active();
     int64_t sec = srv_recorder_elapsed_ms() / 1000;
 
+    /* 单文件上限一小时，连续录音会超过 60 分钟，超过就换成 H:MM:SS */
     char buf[16];
-    snprintf(buf, sizeof(buf), "%02d:%02d", (int)(sec / 60), (int)(sec % 60));
+    if (sec >= 3600) {
+        snprintf(buf, sizeof(buf), "%d:%02d:%02d",
+                 (int)(sec / 3600), (int)((sec / 60) % 60), (int)(sec % 60));
+    } else {
+        snprintf(buf, sizeof(buf), "%02d:%02d", (int)(sec / 60), (int)(sec % 60));
+    }
     lv_label_set_text(s_time_lb, buf);
 
     if (on) {
@@ -91,6 +97,12 @@ void ui_recorder_create(lv_obj_t *root)
     s_state_lb = lv_label_create(root);
     lv_obj_set_style_text_color(s_state_lb, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(s_state_lb, &font_ui_14, 0);
+    /* 存的路径可能很长（rec-123.wav），限宽 + 单行滚动，别撑出屏幕 */
+    lv_obj_set_width(s_state_lb, UI_SCREEN_W - 16);
+    lv_obj_set_height(s_state_lb, font_ui_14.line_height);
+    lv_obj_set_style_text_align(s_state_lb, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_state_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(s_state_lb, 6000, 0);
     lv_label_set_text(s_state_lb,
                       srv_sd_is_mounted() ? "文件保存到 /record" : "SD 卡未挂载");
     lv_obj_align(s_state_lb, LV_ALIGN_CENTER, 0, 22);

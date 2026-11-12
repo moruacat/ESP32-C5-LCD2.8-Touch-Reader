@@ -209,7 +209,9 @@ static void rebuild_list(void)
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
         lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
         lv_obj_set_width(lb, PAGE_LIST_W - 40);
-        lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);
+        /* 长曲名循环滚动，别折行（行高只有 30，折行会盖住下一行） */
+        lv_label_set_long_mode(lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        lv_obj_set_style_anim_duration(lb, 6000, 0);
         /* 不要用 lv_label_set_text_fmt：格式没被解析时会原样留着 label 的
          * 默认文本（"Text"），先在本地拼好再 set_text 最稳 */
         char line[SRV_MUSIC_NAME_MAX + 16];
@@ -741,7 +743,8 @@ static void panel_refresh(void)
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
         lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
         lv_obj_set_width(lb, col_w - 30);
-        lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        lv_obj_set_style_anim_duration(lb, 6000, 0);
         char line[SRV_MUSIC_NAME_MAX + 16];
         snprintf(line, sizeof(line), "%d. %s", i + 1, m->name);
         lv_label_set_text(lb, line);
@@ -849,7 +852,8 @@ static void pick_open(void)
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
         lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
         lv_obj_set_width(lb, PAGE_LIST_W - 60);
-        lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        lv_obj_set_style_anim_duration(lb, 6000, 0);
         lv_label_set_text(lb, m->name);
         lv_obj_align(lb, LV_ALIGN_LEFT_MID, ROW_PAD, 0);
 
@@ -965,6 +969,9 @@ static void panel_open(void)
     lv_obj_set_pos(s_pn_mode, 8, 16);
     lv_dropdown_set_options(s_pn_mode,
                             "全部循环\n列表循环\n单曲循环\n随机播放");
+    /* 默认箭头是 LV_SYMBOL_DOWN（montserrat 自带符号），全局字体换成
+     * font_ui_14 后没有那个字形，显示成空白 —— 用中文字体里有的 ASCII 字符 */
+    lv_dropdown_set_symbol(s_pn_mode, "v");
     lv_dropdown_set_selected(s_pn_mode, (uint16_t)srv_player_mode());
     lv_obj_set_style_bg_color(s_pn_mode, UI_COLOR_BG, 0);
     lv_obj_set_style_text_color(s_pn_mode, UI_COLOR_TEXT, 0);
@@ -1114,9 +1121,11 @@ void ui_music_create(lv_obj_t *root)
 
     ui_titlebar_create(root, "音乐", app_navigator_back_smart_cb, NULL);
 
-    /* 时段静音：每次进页判定一次。落在静音时段内就把音乐音量压到 0%，
-     * 之后（暂停/继续/切歌/退出）都不再干预，重进才重新判定。 */
-    (void)srv_audio_apply_time_mute();
+    /* 时段静音：只在「本来没在放音乐」时判定。后台已经在放（进页只是看看列表/
+     * 换歌），一进门把音量压到 0 会突然没声，不符合手机的使用习惯。 */
+    if (srv_player_state() == SRV_PLAYER_IDLE) {
+        (void)srv_audio_apply_time_mute();
+    }
 
     ensure_ready();
 
@@ -1130,13 +1139,14 @@ void ui_music_create(lv_obj_t *root)
     lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_ACTIVE);
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
 
-    /* 当前曲名 */
+    /* 当前曲名：长名字循环滚动 */
     s_name_lb = lv_label_create(root);
     lv_obj_set_style_text_font(s_name_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_name_lb, UI_COLOR_TEXT, 0);
     lv_obj_set_width(s_name_lb, PAGE_LIST_W);
     lv_obj_set_pos(s_name_lb, PAGE_LIST_X, NAME_Y);
-    lv_label_set_long_mode(s_name_lb, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_name_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(s_name_lb, 6000, 0);
     lv_label_set_text(s_name_lb, "未选择曲目");
 
     /* 进度条 */

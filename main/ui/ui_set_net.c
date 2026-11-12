@@ -161,9 +161,10 @@ static void build_list(lv_obj_t *list)
     /* 当前网络：点击重新匹配历史连接 */
     row = ui_row_create(list, UI_ROW_Y(1), NULL, "当前网络");
     s_cur_lb = ui_row_btn_create(row, -8, 130, "--", on_reconnect, NULL);
-    /* SSID 最长 32 字符，放不下就省略号，别把按钮撑破 */
+    /* SSID 最长 32 字符，放不下就循环滚动，别把按钮撑破 */
     lv_obj_set_width(s_cur_lb, 118);
-    lv_label_set_long_mode(s_cur_lb, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_cur_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(s_cur_lb, 6000, 0);
 
     /* 添加网络：进二级页扫描附近热点，选一个连（加密的要输密码） */
     row = ui_row_create(list, UI_ROW_Y(2), &ic_search, "添加网络");

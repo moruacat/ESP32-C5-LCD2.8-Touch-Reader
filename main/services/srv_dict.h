@@ -97,6 +97,40 @@ typedef bool (*srv_dict_list_cb_t)(const srv_dict_entry_t *e, void *arg);
 
 int srv_dict_prefix(const char *prefix, srv_dict_list_cb_t cb, void *arg, int max);
 
+/* ===================== 词形变化 ===================== */
+
+/*! 一个词的全部变形（字段内多个形式用逗号分隔，如 `roofs,rooves`） */
+typedef struct {
+    char base[40];          /*!< 原形 */
+    char past[64];          /*!< 过去式 */
+    char past_part[64];     /*!< 过去分词 */
+    char ing[64];           /*!< 现在分词 */
+    char third[64];         /*!< 第三人称单数 */
+    char plural[64];        /*!< 复数 */
+    char comp[64];          /*!< 比较级 */
+    char sup[64];           /*!< 最高级 */
+    bool found;             /*!< variants 表里查到该原形的变形 */
+    bool changed;           /*!< 输入词 ≠ 原形（是变形词） */
+} srv_dict_forms_t;
+
+/**
+ * @brief 查一个词的全部变形
+ *
+ * 输入可以是任意形式（ran / better / studies）：
+ *   1. 先按词形还原找到原形（复用 srv_dict_lookup_lemma 的规则 + 表内 lemma）
+ *   2. 再用原形查 dict/variants.dat（由 tools/build_variants.py 生成）
+ *
+ * 数据文件不在时返回 ESP_ERR_NOT_FOUND，`out->base` 仍会填好。
+ */
+esp_err_t srv_dict_forms(const char *word, srv_dict_forms_t *out);
+
+/**
+ * @brief 变形表（dict/variants.dat）是否已成功加载
+ *
+ * UI 用它区分「表没装」和「这个词确实没有变形记录」两种提示。
+ */
+bool srv_dict_variants_ready(void);
+
 /**
  * @brief 拼写容错候选（编辑距离 ≤1，按「长度接近 + 字母序」排）
  *
