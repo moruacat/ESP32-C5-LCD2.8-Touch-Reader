@@ -688,8 +688,246 @@ void srv_dict_translate(const char *text, srv_dict_word_cb_t cb, void *arg)
 /* ===================== 生命周期 ===================== */
 
 /* 释放所有资源（保留路径） */
+/* ===================== 词形变化表（variants.dat） =====================
+ * 与主表分开一个文件：只存「原形 → 各种变形」，约 0.9MB，按原形排序 + 稀疏索引。
+ * 查询流程：lookup_lemma 拿到原形 → 这里按原形块查找。
+ */
+
+#define VAR_LINE_MAX   160
+
+typedef struct {
+    uint32_t off;
+    char     key[ANCHOR_KEY_BYTES + 1];
+} var_anchor_t;
+
+static char          s_path_var[80];
+static FILE         *s_var_fp = NULL;
+static var_anchor_t *s_var_anchors = NULL;
+static int           s_var_anchor_n = 0;
+static int           s_var_step = 64;
+static int           s_var_count = 0;
+static uint32_t      s_var_size = 0;
+static bool          s_var_ready = false;
+static bool          s_var_tried = false;   /*!< 找过一次就不再反复开文件 */
+static char          s_var_line[VAR_LINE_MAX];
+
+static void var_close(void)
+{
+    if (s_var_fp != NULL) {
+        fclose(s_var_fp);
+        s_var_fp = NULL;
+    }
+    free(s_var_anchors);
+    s_var_anchors = NULL;
+    s_var_anchor_n = 0;
+    s_var_count = 0;
+    s_var_size = 0;
+    s_var_ready = false;
+    s_var_tried = false;
+}
+
+static bool var_open(void)
+{
+    if (s_var_ready) {
+        return true;
+    }
+    if (!srv_sd_is_mounted()) {
+        return false;
+    }
+
+    /* 文件可能后拷进来：失败不锁死，下次查询再试；只有第一次打日志 */
+    const bool first_try = !s_var_tried;
+    s_var_tried = true;
+
+    const char *mp = srv_sd_mount_point();
+    if (s_path_var[0] == '\0') {
+        snprintf(s_path_var, sizeof(s_path_var), "%s/dict/variants.dat", mp);
+    }
+    char idx_path[80];
+    snprintf(idx_path, sizeof(idx_path), "%s/dict/variants.idx", mp);
+
+    FILE *fi = fopen(idx_path, "rb");
+    if (fi == NULL) {
+        if (first_try) {
+            ESP_LOGW(TAG, "没有变形表（%s），用 tools/build_variants.py 生成", idx_path);
+        }
+        return false;
+    }
+
+    uint8_t hdr[24];
+    if (fread(hdr, 1, sizeof(hdr), fi) != sizeof(hdr) || memcmp(hdr, "DCTV", 4) != 0) {
+        ESP_LOGE(TAG, "变形表索引损坏或版本不对: %s", idx_path);
+        fclose(fi);
+        return false;
+    }
+    uint16_t ver = 0, step = 0;
+    memcpy(&ver, hdr + 4, 2);
+    memcpy(&step, hdr + 6, 2);
+    memcpy(&s_var_count, hdr + 8, 4);
+    memcpy(&s_var_size, hdr + 12, 4);
+    if (ver != 1 || step < 8 || step > 256 || s_var_count <= 0) {
+        ESP_LOGE(TAG, "变形表索引头异常：ver=%u step=%u count=%d", ver, step, s_var_count);
+        fclose(fi);
+        return false;
+    }
+    s_var_step = step;
+
+    const int n = (s_var_count + s_var_step - 1) / s_var_step;
+    s_var_anchors = heap_caps_malloc((size_t)n * sizeof(var_anchor_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_var_anchors == NULL) {
+        s_var_anchors = malloc((size_t)n * sizeof(var_anchor_t));
+    }
+    if (s_var_anchors == NULL) {
+        ESP_LOGE(TAG, "变形表索引内存不足（%d 个锚点）", n);
+        fclose(fi);
+        return false;
+    }
+
+    for (int i = 0; i < n; i++) {
+        uint8_t raw[12];
+        if (fread(raw, 1, sizeof(raw), fi) != sizeof(raw)) {
+            ESP_LOGE(TAG, "变形表索引不完整（第 %d/%d 个锚点）", i, n);
+            fclose(fi);
+            free(s_var_anchors);
+            s_var_anchors = NULL;
+            return false;
+        }
+        memcpy(&s_var_anchors[i].off, raw, 4);
+        memcpy(s_var_anchors[i].key, raw + 4, ANCHOR_KEY_BYTES);
+        s_var_anchors[i].key[ANCHOR_KEY_BYTES] = '\0';
+    }
+    fclose(fi);
+    s_var_anchor_n = n;
+
+    s_var_fp = fopen(s_path_var, "rb");
+    if (s_var_fp == NULL) {
+        ESP_LOGW(TAG, "打不开变形表 %s", s_path_var);
+        free(s_var_anchors);
+        s_var_anchors = NULL;
+        s_var_anchor_n = 0;
+        return false;
+    }
+
+    s_var_ready = true;
+    ESP_LOGI(TAG, "变形表就绪：%d 个原形（%d 个锚点）", s_var_count, s_var_anchor_n);
+    return true;
+}
+
+bool srv_dict_variants_ready(void)
+{
+    return s_var_ready;
+}
+
+/* 解析 `p:ran|d:run|i:running|3:runs` 到结构体（值里可能带逗号分隔的多个形式） */
+static void parse_forms(char *forms, srv_dict_forms_t *out)
+{
+    chomp(forms);
+
+    char *p = forms;
+    while (p != NULL && *p != '\0') {
+        char *bar = strchr(p, '|');
+        if (bar != NULL) {
+            *bar = '\0';
+        }
+        if (p[0] != '\0' && p[1] == ':') {
+            char *val = p + 2;
+            char *dst = NULL;
+            switch (p[0]) {
+            case 'p': dst = out->past;      break;
+            case 'd': dst = out->past_part; break;
+            case 'i': dst = out->ing;       break;
+            case '3': dst = out->third;     break;
+            case 's': dst = out->plural;    break;
+            case 'r': dst = out->comp;      break;
+            case 't': dst = out->sup;       break;
+            default:  break;
+            }
+            if (dst != NULL) {
+                snprintf(dst, 64, "%s", val);
+            }
+        }
+        p = (bar != NULL) ? bar + 1 : NULL;
+    }
+}
+
+static bool var_find(const char *base, srv_dict_forms_t *out)
+{
+    if (!var_open()) {
+        return false;
+    }
+
+    char tk[ANCHOR_KEY_BYTES];
+    key_of(base, tk);
+
+    int lo = 0, hi = s_var_anchor_n;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (memcmp(s_var_anchors[mid].key, tk, ANCHOR_KEY_BYTES) <= 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    const int ai = (lo > 0) ? (lo - 1) : 0;
+
+    if (fseek(s_var_fp, (long)s_var_anchors[ai].off, SEEK_SET) != 0) {
+        return false;
+    }
+
+    /* 锚点 key 只有 8 字节，目标词可能落在下一块，所以最多连读两块 */
+    for (int i = 0; i < 2 * s_var_step; i++) {
+        if (fgets(s_var_line, sizeof(s_var_line), s_var_fp) == NULL) {
+            return false;
+        }
+        char *tab = strchr(s_var_line, '\t');
+        if (tab == NULL) {
+            continue;
+        }
+        *tab = '\0';
+        const int c = strcmp(s_var_line, base);
+        if (c == 0) {
+            parse_forms(tab + 1, out);
+            return true;
+        }
+        if (c > 0) {
+            return false;
+        }
+    }
+    return false;
+}
+
+esp_err_t srv_dict_forms(const char *word, srv_dict_forms_t *out)
+{
+    if (word == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out, 0, sizeof(*out));
+
+    char w[40];
+    snprintf(w, sizeof(w), "%s", word);
+    for (char *p = w; *p != '\0'; p++) {
+        *p = (char)tolower((unsigned char)*p);
+    }
+
+    srv_dict_entry_t e;
+    memset(&e, 0, sizeof(e));
+    const char *base = w;
+    if (srv_dict_lookup_lemma(w, &e) == ESP_OK) {
+        base = (e.lemma[0] != '\0') ? e.lemma : e.word;
+    }
+    snprintf(out->base, sizeof(out->base), "%s", base);
+    out->changed = (strcmp(base, w) != 0);
+
+    const bool hit = var_find(base, out);
+    out->found = hit;
+
+    return (hit || out->changed) ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
 static void dict_close(void)
 {
+    var_close();
     if (s_fp != NULL) {
         fclose(s_fp);
         s_fp = NULL;

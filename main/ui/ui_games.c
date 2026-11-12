@@ -164,8 +164,10 @@ static void on_game_menu(lv_event_t *e)
 lv_obj_t *ui_game_bar_create(lv_obj_t *root, const char *title)
 {
     /* 复用公共标题栏骨架：右侧不放时钟，留给下面的菜单键。
-     * 顺带得到标题限宽（超长收省略号），这是原来手写版漏掉的。 */
+     * 顺带得到标题限宽（超长收省略号），这是原来手写版漏掉的。
+     * 游戏标题不滚动：棋盘/球场的视野要稳。 */
     lv_obj_t *bar = ui_titlebar_create_plain(root, title, app_navigator_back_smart_cb, NULL);
+    ui_titlebar_set_scroll(bar, false);
 
     /* 右：菜单键（重新开始 / 退出游戏） */
     lv_obj_t *menu = lv_button_create(bar);

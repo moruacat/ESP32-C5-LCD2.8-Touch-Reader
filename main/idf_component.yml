@@ -5,3 +5,8 @@ dependencies:
     public: true
   espressif/esp_lvgl_adapter: "^0.4.0"
   espressif/esp_audio_codec: "^2.5.0"
+  # 小智 AI 语音对话（官方组件：WebSocket/MQTT 传输 + MCP + 音频通道）
+  espressif/esp_xiaozhi: "^0.1.3"
+  # esp_xiaozhi 的公共头里引用了 esp_mcp_engine.h，而它是组件的 PRIV_REQUIRES，
+  # 所以 main 必须自己声明一份，否则编译找不到头文件
+  espressif/mcp-c-sdk: "^2.0.1"

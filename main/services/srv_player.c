@@ -33,7 +33,9 @@ static const char *TAG = "srv_player";
 #define PCM_BUF_MAX         (64 * 1024)
 #define CMD_Q_LEN           8
 #define PLAYER_TASK_STACK   6144
-#define PLAYER_TASK_PRIO    6
+/* 单核 C5：播放任务必须比 LVGL / 触摸高，否则一次 I2C 事务或刷屏就能把
+ * PCM 供数拖过 DMA 缓冲长度，听感就是"每隔一会儿顿一下" */
+#define PLAYER_TASK_PRIO    10
 #define SAVE_MIN_INTERVAL_US (5 * 1000 * 1000)
 #define EMPTY_BLOCK_GUARD   32      /* 连续无输出时的保护次数 */
 
@@ -91,6 +93,84 @@ static TaskHandle_t  s_task = NULL;
 static QueueHandle_t s_q    = NULL;
 
 static int64_t s_last_save_us = 0;
+
+/* ===================== 总线占用统计（串口排查卡顿） =====================
+ * 播放卡顿的两个来源都和总线有关：SD 读卡（SPI2，与 LCD 共用）和 I2S 写。
+ * 每 5 秒输出一次窗口内的累计耗时 / 单次峰值 / 占音频时长的比例：
+ *  - 读占比高  -> 流式播放时 SD 被刷屏抢总线，需要更大的预读缓冲
+ *  - 写占比接近 100% -> I2S 已经喂满，卡顿来自解码太慢
+ *  - 峰值大但占比低 -> 偶发长阻塞（刷屏、WiFi、其他 SD 访问） */
+#define BUS_STAT_WINDOW_US  (5 * 1000 * 1000)
+
+static int64_t s_bus_t0        = 0;
+static int64_t s_bus_read_us   = 0;
+static int64_t s_bus_read_max  = 0;
+static int64_t s_bus_write_us  = 0;
+static int64_t s_bus_write_max = 0;
+static int     s_bus_frames    = 0;
+
+static void bus_stat_add(int64_t read_us, int64_t write_us,
+                         int bytes, int sample_rate, int frame)
+{
+    const int64_t now = esp_timer_get_time();
+    if (s_bus_t0 == 0) {
+        s_bus_t0 = now;
+    }
+
+    if (read_us > 0) {
+        s_bus_read_us += read_us;
+        if (read_us > s_bus_read_max) {
+            s_bus_read_max = read_us;
+        }
+    }
+    if (write_us > 0) {
+        s_bus_write_us += write_us;
+        if (write_us > s_bus_write_max) {
+            s_bus_write_max = write_us;
+        }
+    }
+
+    /* 这个窗口送出去的 PCM 对应多长的音频 */
+    if (frame > 0 && sample_rate > 0 && bytes > 0) {
+        s_bus_frames += bytes / frame;
+    }
+
+    const int64_t span = now - s_bus_t0;
+    if (span < BUS_STAT_WINDOW_US) {
+        return;
+    }
+
+    const int64_t audio_us = (sample_rate > 0 && frame > 0)
+                           ? s_bus_frames * 1000000 / sample_rate : 0;
+    /* 占用率用千分比算，串口日志不依赖浮点格式化 */
+    int rd_pm = (audio_us > 0) ? (int)(s_bus_read_us  * 1000 / audio_us) : 0;
+    int wr_pm = (audio_us > 0) ? (int)(s_bus_write_us * 1000 / audio_us) : 0;
+
+    ESP_LOGI(TAG, "[bus] %llds | 音频 %lld ms | 读卡 %lld ms(峰 %lld) | 写 I2S %lld ms(峰 %lld) | 占用 读 %d.%d%% 写 %d.%d%%",
+             (long long)(span / 1000000),
+             (long long)(audio_us / 1000),
+             (long long)(s_bus_read_us / 1000),  (long long)(s_bus_read_max / 1000),
+             (long long)(s_bus_write_us / 1000), (long long)(s_bus_write_max / 1000),
+             rd_pm / 10, rd_pm % 10, wr_pm / 10, wr_pm % 10);
+
+    s_bus_t0        = now;
+    s_bus_read_us   = 0;
+    s_bus_read_max  = 0;
+    s_bus_write_us  = 0;
+    s_bus_write_max = 0;
+    s_bus_frames    = 0;
+}
+
+/* 换曲/停止时重置统计窗口，免得下首歌的第一行日志混进上一首的空档 */
+static void bus_stat_reset(void)
+{
+    s_bus_t0        = 0;
+    s_bus_read_us   = 0;
+    s_bus_read_max  = 0;
+    s_bus_write_us  = 0;
+    s_bus_write_max = 0;
+    s_bus_frames    = 0;
+}
 
 /* ===================== 队列 ===================== */
 
@@ -416,8 +496,9 @@ static bool track_fill(track_t *t)
     const int64_t dt_ms = (esp_timer_get_time() - t0) / 1000;
     /* 每次读卡的耗时：超过 50ms 说明被 SPI 总线/LVGL 刷屏卡住了，会直接体现在这里 */
     if (dt_ms > 50) {
-        ESP_LOGW(TAG, "读卡 %d ms（%d 字节）", (int)dt_ms, t->in_len);
+        ESP_LOGW(TAG, "读卡 %lld ms（%d 字节）", (long long)dt_ms, t->in_len);
     }
+    bus_stat_add(dt_ms * 1000, 0, 0, 0, 0);
     t->in_used = 0;
     t->eos = (t->in_len < IN_BUF_BYTES);
     return t->in_len > 0;
@@ -441,7 +522,11 @@ static bool pcm_grow(track_t *t, uint32_t need)
 /* 已解出的 PCM 送到扬声器并累计播放位置 */
 static void track_emit(track_t *t, uint32_t bytes)
 {
+    const int64_t t0 = esp_timer_get_time();
     srv_audio_pcm_write(t->pcm_buf, (int)bytes);
+    const int64_t write_us = esp_timer_get_time() - t0;
+
+    bus_stat_add(0, write_us, (int)bytes, t->sample_rate, t->channels * (t->bits / 8));
 
     int frame = t->channels * (t->bits / 8);
     if (frame > 0 && t->sample_rate > 0) {
@@ -660,6 +745,7 @@ static void track_close(track_t *t)
     if (t == NULL) {
         return;
     }
+    bus_stat_reset();
     if (t->codec_open) {
         srv_audio_pcm_close();
     }
@@ -1045,6 +1131,13 @@ esp_err_t srv_player_set_playlist(int list_id)
         return ESP_ERR_INVALID_ARG;
     }
     s_list_id = list_id;
+
+    /* 全部循环时队列就是媒体库，跟当前播放列表无关：切列表只是换下次要放的
+     * 那份名单，正在放的歌不该被打断（否则听歌时翻一下列表就断掉） */
+    if (queue_is_library()) {
+        ESP_LOGI(TAG, "切换到播放列表 %d（全部循环中，播放不中断）", list_id);
+        return ESP_OK;
+    }
 
     /* 列表换了，当前曲目序号可能越界 */
     int n = srv_musiclib_playlist_item_count();

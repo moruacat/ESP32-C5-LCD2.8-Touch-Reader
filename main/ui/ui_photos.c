@@ -774,7 +774,10 @@ void ui_photos_create(lv_obj_t *root)
     lv_obj_set_style_pad_all(s_fs_name, 3, 0);
     lv_obj_set_style_radius(s_fs_name, 4, 0);
     lv_obj_set_width(s_fs_name, UI_SCREEN_W - 16);
-    lv_label_set_long_mode(s_fs_name, LV_LABEL_LONG_DOT);
+    lv_obj_set_height(s_fs_name, font_ui_14.line_height + 6);
+    /* 长文件名循环滚动看全称，别折成两行压到照片上 */
+    lv_label_set_long_mode(s_fs_name, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(s_fs_name, 6000, 0);
     lv_obj_align(s_fs_name, LV_ALIGN_BOTTOM_MID, 0, -6);
 
     lv_obj_add_event_cb(root, photos_root_del_cb, LV_EVENT_DELETE, NULL);

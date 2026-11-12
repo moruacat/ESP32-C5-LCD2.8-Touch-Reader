@@ -7,11 +7,30 @@
 
 #include <string.h>
 
-#define CARD_W      148
-#define CARD_H      94
 #define X0          8
 #define Y0          UI_CONTENT_Y
 #define GAP         8
+
+/* 三列等分（每列 96 宽），布局按草图的大致占比：
+ *
+ *   ┌────────── 书架（跨 2 列）──────────┐ ┌────┐
+ *   ├───────────┬───────────┤           │ │    │
+ *   │   游戏    │   电台    │           │ │音乐│
+ *   ├───────────┼───────────┼───────────┤ │    │
+ *   │   照片    │  录音机   │    AI     │ │    │
+ *   └───────────┴───────────┴───────────┘ └────┘
+ *
+ * 音乐跨前两行，第三行三格均分。 */
+#define COL_W       96
+#define X0          8
+#define Y0          UI_CONTENT_Y
+#define GAP         8
+#define COL_STEP    (COL_W + GAP)
+#define ROW1_H      64
+#define ROW2_H      56
+#define ROW3_H      56
+#define ROW2_Y      (Y0 + ROW1_H + GAP)
+#define ROW3_Y      (Y0 + ROW1_H + GAP + ROW2_H + GAP)
 
 /* ===================== 照片入口（带密码校验） ===================== */
 
@@ -81,30 +100,35 @@ static void on_photos(lv_event_t *e)
     enter_photos();
 }
 
+static void on_ai(lv_event_t *e)
+{
+    (void)e;
+    app_navigator_switch(PAGE_AI, true);
+}
+
 void ui_func_create(lv_obj_t *root)
 {
     ui_titlebar_create(root, "功能", app_navigator_back_smart_cb, NULL);
 
-    /* 第一行：书架 | 音乐 */
-    ui_card_create(root, X0, Y0, CARD_W, CARD_H,
+    /* 第一行：书架跨两列 */
+    ui_card_create(root, X0, Y0, COL_W * 2 + GAP, ROW1_H,
                    &ic_bookshelf, "书架", 0x8B5A2B, on_bookshelf, NULL);
-    ui_card_create(root, X0 + CARD_W + GAP, Y0, CARD_W, CARD_H,
-                   &ic_music, "音乐", 0x2E8B57, on_music, NULL);
 
-    /* 第二行：游戏 | 电台 | 照片 | 录音机
-     * 四张窄卡排满一行：左边两张对齐「书架」，右边两张对齐「音乐」。 */
-    const lv_coord_t row_y  = Y0 + CARD_H + GAP;
-    const lv_coord_t row_x  = X0 + CARD_W + GAP;
-    const lv_coord_t half_w = (CARD_W - GAP) / 2;
-    const lv_coord_t step   = half_w + GAP;
-
-    ui_card_create(root, X0, row_y, half_w, CARD_H,
+    /* 第二行：游戏 | 电台 */
+    ui_card_create(root, X0, ROW2_Y, COL_W, ROW2_H,
                    &ic_game, "游戏", 0xC06A2B, on_games, NULL);
-    ui_card_create(root, X0 + step, row_y, half_w, CARD_H,
+    ui_card_create(root, X0 + COL_STEP, ROW2_Y, COL_W, ROW2_H,
                    &ic_radio, "电台", 0x1585C0, on_radio, NULL);
 
-    ui_card_create(root, row_x, row_y, half_w, CARD_H,
+    /* 第三行：照片 | 录音机 | AI */
+    ui_card_create(root, X0, ROW3_Y, COL_W, ROW3_H,
                    &ic_image, "照片", 0x3B9EFF, on_photos, NULL);
-    ui_card_create(root, row_x + step, row_y, half_w, CARD_H,
+    ui_card_create(root, X0 + COL_STEP, ROW3_Y, COL_W, ROW3_H,
                    &ic_record, "录音机", 0xE5484D, on_recorder, NULL);
+    ui_card_create(root, X0 + COL_STEP * 2, ROW3_Y, COL_W, ROW3_H,
+                   &ic_ai, "AI", 0x7C4DFF, on_ai, NULL);
+
+    /* 右侧一列：音乐，跨前两行 */
+    ui_card_create(root, X0 + COL_STEP * 2, Y0, COL_W, ROW1_H + GAP + ROW2_H,
+                   &ic_music, "音乐", 0x2E8B57, on_music, NULL);
 }

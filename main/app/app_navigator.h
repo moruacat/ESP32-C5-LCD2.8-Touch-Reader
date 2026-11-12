@@ -22,6 +22,7 @@ typedef enum {
     PAGE_SET_BRIGHT,    /*!< 设置->亮度 */
     PAGE_SET_ABOUT,     /*!< 设置->关于 */
     PAGE_SET_BATTERY,   /*!< 设置->电池 */
+    PAGE_SET_PHOTO,     /*!< 设置->照片（照片密码） */
     PAGE_FILES,         /*!< 文件管理（浏览 SD 卡） */
     PAGE_CALENDAR,      /*!< 日历（时钟页上滑） */
     PAGE_SAFE_MENU,     /*!< 安全菜单（时钟页手势：连点 5 次 + 右滑） */
@@ -41,7 +42,10 @@ typedef enum {
     PAGE_RECORDER,      /*!< 录音机 */
     PAGE_PHOTOS,        /*!< 照片（列表 + 全屏横滑浏览） */
     PAGE_WORDS,         /*!< 单词（查词） */
+    PAGE_WORD_FORMS,    /*!< 单词变形查询 */
+    PAGE_WORD_STUDY,    /*!< 单词学习（分单元卡片） */
     PAGE_RADIO,         /*!< 电台（中国之声 · HLS 在线直播） */
+    PAGE_AI,            /*!< 小智 AI 语音对话 */
     PAGE_MAX,
 } app_page_id_t;
 
@@ -96,6 +100,14 @@ void app_navigator_hide(void);
  * @brief 当前页面 ID
  */
 app_page_id_t app_navigator_current(void);
+
+/**
+ * @brief 当前页面的上一页（返回栈顶）；栈空时返回 PAGE_CLOCK
+ *
+ * 用于「同一个页面从不同入口进来要显示不同内容」的场景，
+ * 例如关于页只有从完整版设置进来才显示安全模式开关。
+ */
+app_page_id_t app_navigator_prev(void);
 
 /**
  * @brief 通用返回回调：直接挂到标题栏返回键上即可

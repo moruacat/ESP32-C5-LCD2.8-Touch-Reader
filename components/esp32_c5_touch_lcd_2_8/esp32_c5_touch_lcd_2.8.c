@@ -327,6 +327,11 @@ esp_io_expander_handle_t bsp_get_io_expander_handle(void)
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(BSP_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
+    /* 默认 6 x 240 帧在 16k 单声道下只有 90ms 缓冲，单核 C5 上被 I2C 事务 /
+     * 刷屏打断时容易听到"顿一下"。加到 6 x 320（约 120ms），抗打断但不至于
+     * 让语音对话的延迟明显变长。 */
+    chan_cfg.dma_desc_num  = 6;
+    chan_cfg.dma_frame_num = 320;
     BSP_ERROR_CHECK_RETURN_ERR(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
 
     const i2s_std_config_t std_cfg_default = BSP_I2S_DUPLEX_MONO_CFG(22050);

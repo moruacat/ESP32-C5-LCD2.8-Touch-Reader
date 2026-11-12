@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "esp_codec_dev.h"
+#include "esp_codec_dev_defaults.h"
 #include "bsp/esp32_c5_touch_lcd_2.8.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -26,6 +27,16 @@ static int   s_volume = 0;
 /* 保护扬声器通道的打开/关闭：音乐播放与提示音互斥 */
 static SemaphoreHandle_t s_dev_mtx = NULL;
 static bool  s_pcm_open = false;
+
+/* 麦克风（录音机 / 语音助手共用） */
+static esp_codec_dev_handle_t s_mic = NULL;
+static bool                   s_mic_open = false;
+/*! 麦克风增益（dB）。ES8311 的 ADC PGA 支持 0~30dB，模拟麦本体输出偏小，
+ *  默认给 24dB；如果录音/语音上行出现削顶失真就往下调到 18 或 12 */
+#define MIC_GAIN_DB  24.0f
+/*! 麦克风单独一把锁：读麦会阻塞 100ms 级，不能和扬声器写共用一把，
+ *  否则 TTS 播放会被录音的读操作卡住 */
+static SemaphoreHandle_t      s_mic_mtx = NULL;
 
 static void dev_lock(void)
 {
@@ -49,6 +60,9 @@ esp_err_t srv_audio_init(void)
 
     if (s_dev_mtx == NULL) {
         s_dev_mtx = xSemaphoreCreateMutex();
+    }
+    if (s_mic_mtx == NULL) {
+        s_mic_mtx = xSemaphoreCreateMutex();
     }
 
     /* i2s_config 传 NULL 时 BSP 使用内置默认（22050Hz / 单声道 / 16bit） */
@@ -223,6 +237,165 @@ void srv_audio_pcm_close(void)
 bool srv_audio_pcm_is_open(void)
 {
     return s_pcm_open;
+}
+
+/* ===================== 麦克风（录音机 / 语音助手共用） ===================== */
+
+/**
+ * @brief 建一个录音方向的 ES8311 设备（懒创建，两个使用者共用）
+ *
+ * BSP 头里虽然声明了 bsp_audio_codec_microphone_init()，但组件里只有 speaker
+ * 的实现（链接时会报 undefined reference），所以这里照 speaker 的写法自己搭一个：
+ * 复用 BSP 建好的 I2S（片上是全双工）和 I2C 总线，只新建一个 ADC 方向的 codec 设备。
+ */
+static esp_codec_dev_handle_t mic_dev_create(void)
+{
+    const audio_codec_data_if_t *data_if = bsp_audio_get_codec_itf();
+    i2c_master_bus_handle_t      i2c_bus = bsp_i2c_get_handle();
+
+    if (data_if == NULL || i2c_bus == NULL) {
+        ESP_LOGE(TAG, "I2S/I2C 尚未就绪（音频要先初始化）");
+        return NULL;
+    }
+
+    const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+
+    audio_codec_i2c_cfg_t i2c_cfg = {
+        .port       = BSP_I2C_NUM,
+        .addr       = ES8311_CODEC_DEFAULT_ADDR,
+        .bus_handle = i2c_bus,
+    };
+    const audio_codec_ctrl_if_t *ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
+    if (ctrl_if == NULL) {
+        ESP_LOGE(TAG, "codec 控制接口创建失败");
+        return NULL;
+    }
+
+    esp_codec_dev_hw_gain_t gain = {
+        .pa_voltage        = 5.0,
+        .codec_dac_voltage = 3.3,
+    };
+
+    es8311_codec_cfg_t es_cfg = {
+        .ctrl_if     = ctrl_if,
+        .gpio_if     = gpio_if,
+        .codec_mode  = ESP_CODEC_DEV_WORK_MODE_ADC,     /* 只用录音通路 */
+        .pa_pin      = BSP_POWER_AMP_IO,
+        .pa_reverted = false,
+        .master_mode = false,
+        .use_mclk    = false,
+        .digital_mic = false,                           /* 板上是模拟麦 */
+        .invert_mclk = false,
+        .invert_sclk = false,
+        .hw_gain     = gain,
+    };
+    const audio_codec_if_t *codec_if = es8311_codec_new(&es_cfg);
+    if (codec_if == NULL) {
+        ESP_LOGE(TAG, "ES8311 codec 创建失败");
+        return NULL;
+    }
+
+    esp_codec_dev_cfg_t dev_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .codec_if = codec_if,
+        .data_if  = data_if,
+    };
+    esp_codec_dev_handle_t dev = esp_codec_dev_new(&dev_cfg);
+    if (dev == NULL) {
+        ESP_LOGE(TAG, "录音设备创建失败");
+    }
+    return dev;
+}
+
+esp_err_t srv_audio_mic_open(int sample_rate, int channels, int bits)
+{
+    if (!s_inited) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (sample_rate <= 0 || channels <= 0 || bits <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_mic_open) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_mic_mtx == NULL) {
+        s_mic_mtx = xSemaphoreCreateMutex();
+    }
+    if (s_mic == NULL) {
+        s_mic = mic_dev_create();
+        if (s_mic == NULL) {
+            return ESP_FAIL;
+        }
+    }
+
+    esp_codec_dev_sample_info_t fs = {
+        .bits_per_sample = (uint8_t)bits,
+        .channel         = (uint8_t)channels,
+        .sample_rate     = (uint32_t)sample_rate,
+    };
+
+    if (s_mic_mtx != NULL) {
+        xSemaphoreTake(s_mic_mtx, portMAX_DELAY);
+    }
+    esp_err_t ret = esp_codec_dev_open(s_mic, &fs);
+    if (ret == ESP_OK) {
+        s_mic_open = true;
+        /* 打开之后再设增益：ES8311 的 PGA 是 codec 打开后才可写的 */
+        esp_err_t gr = esp_codec_dev_set_in_gain(s_mic, MIC_GAIN_DB);
+        if (gr != ESP_OK) {
+            ESP_LOGW(TAG, "麦克风增益设置失败: %s", esp_err_to_name(gr));
+        } else {
+            ESP_LOGI(TAG, "麦克风增益 %.0f dB", (double)MIC_GAIN_DB);
+        }
+    }
+    if (s_mic_mtx != NULL) {
+        xSemaphoreGive(s_mic_mtx);
+    }
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "麦克风打开失败: %s", esp_err_to_name(ret));
+    }
+    return ret;
+}
+
+int srv_audio_mic_read(void *data, int bytes)
+{
+    if (s_mic == NULL || data == NULL || bytes <= 0) {
+        return -1;
+    }
+
+    int ret = -1;
+    if (s_mic_mtx != NULL) {
+        xSemaphoreTake(s_mic_mtx, portMAX_DELAY);
+    }
+    if (s_mic_open) {
+        ret = esp_codec_dev_read(s_mic, data, bytes);
+    }
+    if (s_mic_mtx != NULL) {
+        xSemaphoreGive(s_mic_mtx);
+    }
+    return ret;
+}
+
+void srv_audio_mic_close(void)
+{
+    if (!s_mic_open) {
+        return;
+    }
+    if (s_mic_mtx != NULL) {
+        xSemaphoreTake(s_mic_mtx, portMAX_DELAY);
+    }
+    s_mic_open = false;
+    esp_codec_dev_close(s_mic);
+    if (s_mic_mtx != NULL) {
+        xSemaphoreGive(s_mic_mtx);
+    }
+}
+
+bool srv_audio_mic_is_open(void)
+{
+    return s_mic_open;
 }
 
 /* ===================== 提示音 ===================== */

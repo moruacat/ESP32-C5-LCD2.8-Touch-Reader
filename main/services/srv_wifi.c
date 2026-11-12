@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,8 @@ static const char *TAG = "srv_wifi";
 
 #define CONNECT_RETRY_MAX   3
 #define CONNECT_WAIT_MS     15000       /* 单次连接等待上限 */
+
+/* ===================== 控制接口互斥 ===================== */
 
 /* 历史记录：一条 = SSID + 密码 */
 typedef struct {
@@ -40,6 +43,28 @@ static int                s_retry    = 0;
 static char               s_ip[16];
 static char               s_ssid[SRV_WIFI_SSID_MAX];
 static int8_t             s_rssi     = 0;
+
+/*! 保护 esp_wifi_* 控制类调用的串行化。
+ *  用户手快点两下「连接」/「当前网络」会从 LVGL 线程连发两次调用，
+ *  和自动连接任务撞在一起时 esp_wifi_set_config / esp_wifi_start 会直接
+ *  abort（panic）。用递归锁：srv_wifi_connect 内部会调 srv_wifi_set_enabled。 */
+static SemaphoreHandle_t  s_api_mtx  = NULL;
+/*! 自动连接任务是否在跑：双击「当前网络」会起两个扫描任务，必须挡掉 */
+static volatile bool      s_auto_running = false;
+
+static void api_lock(void)
+{
+    if (s_api_mtx != NULL) {
+        xSemaphoreTakeRecursive(s_api_mtx, portMAX_DELAY);
+    }
+}
+
+static void api_unlock(void)
+{
+    if (s_api_mtx != NULL) {
+        xSemaphoreGiveRecursive(s_api_mtx);
+    }
+}
 
 /*! 手动选网络期间置位：让后台自动连接让位，也让「主动断开」引起的事件不触发重连 */
 static volatile bool      s_manual_busy = false;
@@ -285,6 +310,10 @@ esp_err_t srv_wifi_init(void)
     hist_set_path();
     hist_load();
 
+    if (s_api_mtx == NULL) {
+        s_api_mtx = xSemaphoreCreateRecursiveMutex();
+    }
+
     s_evt = xEventGroupCreate();
     if (s_evt == NULL) {
         return ESP_ERR_NO_MEM;
@@ -326,6 +355,15 @@ esp_err_t srv_wifi_set_enabled(bool on)
         return ESP_ERR_INVALID_STATE;
     }
 
+    api_lock();
+
+    /* 双击开关会连发两次「开」：驱动已经在跑时再 esp_wifi_start 会返回
+     * STATE 错误，这里直接吞掉，别把 s_enabled 改成关 */
+    if (on && s_enabled) {
+        api_unlock();
+        return ESP_OK;
+    }
+
     if (!on) {
         s_enabled    = false;
         s_connecting = false;
@@ -336,6 +374,7 @@ esp_err_t srv_wifi_set_enabled(bool on)
         esp_wifi_stop();
         s_connected = false;
         s_ip[0] = '\0';
+        api_unlock();
         ESP_LOGI(TAG, "网络已关闭");
         return srv_config_set_int(CFG_WIFI_EN, 0, true);
     }
@@ -348,8 +387,11 @@ esp_err_t srv_wifi_set_enabled(bool on)
     if (ret != ESP_OK && ret != ESP_ERR_WIFI_CONN) {
         ESP_LOGE(TAG, "esp_wifi_start 失败: %s", esp_err_to_name(ret));
         s_enabled = false;
+        api_unlock();
         return ret;
     }
+
+    api_unlock();
 
     ESP_LOGI(TAG, "网络已开启");
     srv_config_set_int(CFG_WIFI_EN, 1, false);
@@ -465,9 +507,14 @@ esp_err_t srv_wifi_connect(const char *ssid, const char *pass, bool save, bool m
         s_auto_stop = true;
     }
 
+    /* 双击「连接」会让两次调用几乎同时进来：把配置/连接这一段串起来，
+     * 否则 esp_wifi_set_config 在驱动正在处理上一次请求时会 abort。 */
+    api_lock();
+
     if (!s_enabled) {
         esp_err_t ret = srv_wifi_set_enabled(true);
         if (ret != ESP_OK) {
+            api_unlock();
             return ret;
         }
         if (manual) {
@@ -493,10 +540,20 @@ esp_err_t srv_wifi_connect(const char *ssid, const char *pass, bool save, bool m
     s_connecting = true;
     xEventGroupClearBits(s_evt, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    /* 不能用 ESP_ERROR_CHECK：连点/换网时驱动可能返回 STATE 错误，
+     * 那样会直接 abort 整机 */
+    esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "设置 %s 的配置失败: %s", ssid, esp_err_to_name(ret));
+        s_manual_busy = false;
+        s_connecting  = false;
+        api_unlock();
+        return ret;
+    }
 
-    esp_err_t ret = esp_wifi_connect();
+    ret = esp_wifi_connect();
     s_manual_busy = false;
+    api_unlock();
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "连接 %s 失败: %s", ssid, esp_err_to_name(ret));
@@ -519,10 +576,13 @@ esp_err_t srv_wifi_disconnect(void)
     if (!s_inited) {
         return ESP_ERR_INVALID_STATE;
     }
+    api_lock();
     s_enabled    = false;              /* 抑制自动重连 */
     s_connecting = false;
     s_auto_stop  = true;
-    return esp_wifi_disconnect();
+    esp_err_t ret = esp_wifi_disconnect();
+    api_unlock();
+    return ret;
 }
 
 /* ===================== 开机自动连接 ===================== */
@@ -536,12 +596,14 @@ static void autoconnect_task(void *arg)
     /* 任务可能刚起来就被手动连接叫停了，别白扫一遍 */
     if (s_auto_stop || !s_enabled) {
         ESP_LOGI(TAG, "自动连接被取消");
+        s_auto_running = false;
         vTaskDelete(NULL);
         return;
     }
 
     ESP_LOGI(TAG, "自动连接：开始扫描");
     if (srv_wifi_scan(NULL, NULL, &found) != ESP_OK) {
+        s_auto_running = false;
         vTaskDelete(NULL);
         return;
     }
@@ -551,6 +613,7 @@ static void autoconnect_task(void *arg)
         /* 用户自己连了别的网络，或者网络被关掉：立刻停手 */
         if (s_auto_stop || !s_enabled) {
             ESP_LOGI(TAG, "自动连接被取消");
+            s_auto_running = false;
             vTaskDelete(NULL);
             return;
         }
@@ -570,6 +633,7 @@ static void autoconnect_task(void *arg)
                                                pdMS_TO_TICKS(CONNECT_WAIT_MS));
         if (bits & WIFI_CONNECTED_BIT) {
             ESP_LOGI(TAG, "自动连接成功: %s", ssid);
+            s_auto_running = false;
             vTaskDelete(NULL);
             return;
         }
@@ -579,6 +643,7 @@ static void autoconnect_task(void *arg)
     }
 
     ESP_LOGW(TAG, "自动连接：历史中无可连接网络");
+    s_auto_running = false;
     vTaskDelete(NULL);
 }
 
@@ -587,8 +652,16 @@ esp_err_t srv_wifi_autoconnect(void)
     if (!s_inited) {
         return ESP_ERR_INVALID_STATE;
     }
+    /* 已经有一轮在跑就别再起：双击「当前网络」会连发两次，
+     * 两个任务同时 scan/connect 会把 wifi 驱动搞崩 */
+    if (s_auto_running) {
+        ESP_LOGI(TAG, "自动连接已在运行，忽略重复请求");
+        return ESP_OK;
+    }
     s_auto_stop = false;               /* 新的一轮自动连接，重新开始 */
+    s_auto_running = true;
     if (xTaskCreate(autoconnect_task, "wifi_auto", 4096, NULL, 4, NULL) != pdPASS) {
+        s_auto_running = false;
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

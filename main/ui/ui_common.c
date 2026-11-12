@@ -2,6 +2,7 @@
 #include "ui_icons.h"
 #include "ui_dialog.h"
 #include "app_navigator.h"
+#include "srv_audio.h"
 #include "srv_rtc.h"
 #include "srv_safe.h"
 
@@ -294,12 +295,14 @@ static lv_obj_t *titlebar_build(lv_obj_t *parent, const char *title,
 
     /* 标题居中。必须限宽 + 限一行高：书名/章名可能很长，不限的话 label 会
      * 按文字撑开、溢出标题栏被裁，而它是居中摆放的，看到的是**中间一截**。
-     * 限了之后超出的部分按 LV_LABEL_LONG_DOT 收成省略号。 */
+     * 默认用循环滚动：长标题（文件名等）能看全，短标题不滚。
+     * 阅读器/游戏页的标题由 ui_titlebar_set_scroll() 关掉，改成省略号。 */
     lv_obj_t *ttl = lv_label_create(bar);
     lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
     lv_label_set_text(ttl, title ? title : "");
-    lv_label_set_long_mode(ttl, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(ttl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(ttl, 6000, 0);
     /* 文字必须在限宽之后仍居中：label 宽度是写死的（为了不被长标题顶出去），
      * 默认左对齐的话短标题会紧贴左边，看着整体偏左。 */
     lv_obj_set_style_text_align(ttl, LV_TEXT_ALIGN_CENTER, 0);
@@ -359,6 +362,19 @@ void ui_titlebar_set_title(lv_obj_t *bar, const char *title)
     lv_obj_align(ttl, LV_ALIGN_CENTER, 0, 0);   /* 换字后重新居中 */
 }
 
+void ui_titlebar_set_scroll(lv_obj_t *bar, bool on)
+{
+    if (bar == NULL) {
+        return;
+    }
+    lv_obj_t *ttl = (lv_obj_t *)lv_obj_get_user_data(bar);
+    if (ttl == NULL) {
+        return;
+    }
+    /* 阅读器/游戏页的标题不滚：正文/棋盘本身就占满视野，标题一直动太吵 */
+    lv_label_set_long_mode(ttl, on ? LV_LABEL_LONG_SCROLL_CIRCULAR : LV_LABEL_LONG_DOT);
+}
+
 /* ===================== 卡片 ===================== */
 
 lv_obj_t *ui_card_create(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
@@ -381,16 +397,26 @@ lv_obj_t *ui_card_create(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
         lv_obj_add_event_cb(card, cb, LV_EVENT_CLICKED, arg);
     }
 
-    /* 图标 + 文字整体在卡片内居中 */
+    /* 图标 + 文字：按内容总高从顶部算，保证在小卡片里也不溢出。
+     * 之前用「中心 + 固定偏移」，56px 高的功能卡上图标顶边会跑到 -2px。 */
     lv_coord_t icon_sz = 28;
     bool with_label = (label != NULL && label[0] != '\0');
+
+    lv_coord_t gap   = 4;
+    lv_coord_t lh    = (lv_coord_t)lv_font_get_line_height(&font_ui_14);
+    lv_coord_t total = (icon != NULL ? icon_sz : 0) + (icon != NULL && with_label ? gap : 0) +
+                       (with_label ? lh : 0);
+    lv_coord_t top   = (h - total) / 2;
+    if (top < 1) {
+        top = 1;
+    }
 
     if (icon != NULL) {
         lv_obj_t *ic = lv_image_create(card);
         lv_image_set_src(ic, icon);
         lv_obj_set_style_image_recolor(ic, lv_color_hex(color), 0);
         lv_obj_set_style_radius(ic, 0, 0);
-        lv_obj_align(ic, LV_ALIGN_CENTER, 0, with_label ? -(icon_sz / 2 + 2) : 0);
+        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, top);
     }
 
     if (with_label) {
@@ -398,10 +424,107 @@ lv_obj_t *ui_card_create(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
         lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
         lv_obj_set_style_text_font(lb, &font_ui_14, 0);
         lv_label_set_text(lb, label);
-        lv_obj_align(lb, LV_ALIGN_CENTER, 0, icon ? (icon_sz / 2 + 4) : 0);
+        lv_obj_align(lb, LV_ALIGN_TOP_MID, 0,
+                     top + (icon != NULL ? icon_sz + gap : 0));
     }
 
     return card;
+}
+
+/* ===================== 音量弹层 ===================== */
+
+static lv_obj_t *s_vol_pop;
+static lv_obj_t *s_vol_pop_val;
+
+static void vol_pop_close(void)
+{
+    if (s_vol_pop != NULL) {
+        lv_obj_delete(s_vol_pop);
+        s_vol_pop = NULL;
+        s_vol_pop_val = NULL;
+    }
+}
+
+static void vol_pop_del_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_DELETE) {
+        s_vol_pop = NULL;
+        s_vol_pop_val = NULL;
+    }
+}
+
+static void vol_pop_dismiss_cb(lv_event_t *e)
+{
+    (void)e;
+    vol_pop_close();
+}
+
+static void vol_pop_slider_cb(lv_event_t *e)
+{
+    int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    (void)srv_audio_set_volume(v);
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d%%", v);
+    if (s_vol_pop_val != NULL) {
+        lv_label_set_text(s_vol_pop_val, buf);
+    }
+}
+
+void ui_volume_popup_show(void)
+{
+    if (s_vol_pop != NULL) {
+        return;                     /* 已经开着 */
+    }
+
+    s_vol_pop = lv_obj_create(lv_screen_active());
+    lv_obj_remove_flag(s_vol_pop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(s_vol_pop, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_pos(s_vol_pop, 0, 0);
+    lv_obj_set_style_bg_color(s_vol_pop, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_vol_pop, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(s_vol_pop, 0, 0);
+    lv_obj_set_style_radius(s_vol_pop, 0, 0);
+    lv_obj_set_style_pad_all(s_vol_pop, 0, 0);
+    lv_obj_add_event_cb(s_vol_pop, vol_pop_dismiss_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_vol_pop, vol_pop_del_cb, LV_EVENT_DELETE, NULL);
+
+    lv_obj_t *box = lv_obj_create(s_vol_pop);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);    /* 吃掉点击，别穿透到遮罩 */
+    lv_obj_set_size(box, 260, 84);
+    lv_obj_center(box);
+    lv_obj_set_style_bg_color(box, UI_COLOR_SURFACE, 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(box, UI_COLOR_PRIMARY, 0);
+    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_radius(box, 10, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
+
+    lv_obj_t *ttl = lv_label_create(box);
+    lv_obj_set_style_text_font(ttl, &font_ui_14, 0);
+    lv_obj_set_style_text_color(ttl, UI_COLOR_TEXT, 0);
+    lv_label_set_text(ttl, "音量");
+    lv_obj_set_pos(ttl, 14, 8);
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d%%", srv_audio_get_volume());
+    s_vol_pop_val = lv_label_create(box);
+    lv_obj_set_style_text_font(s_vol_pop_val, &font_ui_14, 0);
+    lv_obj_set_style_text_color(s_vol_pop_val, UI_COLOR_TEXT_DIM, 0);
+    lv_label_set_text(s_vol_pop_val, buf);
+    lv_obj_align(s_vol_pop_val, LV_ALIGN_TOP_RIGHT, -14, 8);
+
+    lv_obj_t *sl = lv_slider_create(box);
+    lv_obj_set_size(sl, 220, 10);
+    lv_obj_align(sl, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_slider_set_range(sl, 0, 100);
+    lv_slider_set_value(sl, srv_audio_get_volume(), LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(sl, UI_COLOR_BG, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sl, UI_COLOR_PRIMARY, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, UI_COLOR_PRIMARY, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(sl, 0, LV_PART_KNOB);
+    lv_obj_add_event_cb(sl, vol_pop_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 /* ===================== 占位内容 ===================== */
