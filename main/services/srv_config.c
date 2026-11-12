@@ -101,6 +101,8 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_READ_AUTO_SEC,    read_auto_sec,   15,     5, 600),
     /* 书架按最近阅读排序：越后读的越靠前 */
     I32(CFG_SHELF_RECENT,    shelf_recent,      CFG_DEF_SHELF_RECENT, 0, 1),
+    /* 书架/阅读器共用方向；运行时只接受 0/270，持久化后下次进页直接按它构屏 */
+    I32(CFG_ROT_BOOKSHELF,   rot_bookshelf,     CFG_DEF_ROT,          0, 270),
 
     /* 传感器 */
     I32(CFG_TEMP_REC_EN,     temp_rec_en,      1,      0, 1),
@@ -113,6 +115,7 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_TIMER_SOUND,     timer_sound,      1,      0, 1),
 
     /* 音乐 */
+    I32(CFG_ROT_MUSIC,       rot_music,         CFG_DEF_ROT,          0, 270),
     IDX("mute1_en",          mute_en,   0,     0,      0, 1),
     IDX("mute1_s",           mute_s,    0,     480,    0, 1439),
     IDX("mute1_e",           mute_e,    0,     600,    0, 1439),

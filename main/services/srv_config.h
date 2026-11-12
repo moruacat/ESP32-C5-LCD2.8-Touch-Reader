@@ -60,6 +60,7 @@ typedef struct {
     int32_t read_keep_bright;                           /*!< 阅读器里不自动降亮度 0/1 */
     int32_t read_auto_sec;                              /*!< 自动翻页间隔（秒） */
     int32_t shelf_recent;                               /*!< 书架按最近阅读排序 0/1 */
+    int32_t rot_bookshelf;                              /*!< 书架/阅读器方向：0=横屏，270=竖屏 */
 
     /* 传感器 */
     int32_t temp_rec_en;                                /*!< 温湿度记录开关 0/1 */
@@ -71,6 +72,7 @@ typedef struct {
     int32_t timer_sound;                                /*!< 倒计时到点提示音开关 0/1 */
 
     /* 音乐 */
+    int32_t rot_music;                                  /*!< 音乐页方向：0=横屏，270=竖屏 */
     int32_t mute_en[SRV_CONFIG_MUTE_NUM];               /*!< 静音时段开关 */
     int32_t mute_s[SRV_CONFIG_MUTE_NUM];                /*!< 起始时刻（当天第几分钟） */
     int32_t mute_e[SRV_CONFIG_MUTE_NUM];                /*!< 结束时刻（当天第几分钟） */
@@ -106,6 +108,8 @@ typedef struct {
 #define CFG_READ_KEEP_BRIGHT "read_keep_bright"
 #define CFG_READ_AUTO_SEC   "read_auto_sec"    /*!< 自动翻页间隔（秒） */
 #define CFG_SHELF_RECENT    "shelf_recent"
+#define CFG_ROT_BOOKSHELF   "rot_bookshelf" /*!< 书架/阅读器方向 0/270 */
+#define CFG_ROT_MUSIC       "rot_music"     /*!< 音乐页方向 0/270 */
 #define CFG_TEMP_REC_EN     "temp_rec_en"
 #define CFG_TIMER_SOUND     "timer_sound"
 #define CFG_MOTION_FLIP     "motion_flip"
@@ -136,6 +140,8 @@ typedef struct {
 #define CFG_DEF_TOUCH_WAKE      1
 /*! 书架默认按最近阅读排序（关掉按扫描顺序） */
 #define CFG_DEF_SHELF_RECENT    1
+/*! 书架/阅读器、音乐页默认横屏 */
+#define CFG_DEF_ROT             0
 /*! 「快速返回主页」默认关：先保持原来的逐级返回习惯 */
 #define CFG_DEF_FAST_HOME       0
 /*! 默认时区：UTC+8 */

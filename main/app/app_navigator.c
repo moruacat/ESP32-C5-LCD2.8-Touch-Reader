@@ -89,6 +89,10 @@ static int           s_depth   = 0;
 static app_page_id_t s_current = PAGE_CLOCK;
 static lv_obj_t     *s_screen  = NULL;
 
+/* 运行时方向状态：重启后从 srv_config 恢复；页面切换前先按它设置硬件/逻辑方向。 */
+static uint16_t s_rot_bookshelf = 0;   /* 书架与阅读器共用 */
+static uint16_t s_rot_music     = 0;
+
 /* 这些页面自己要用横向滑动（翻页 / 操作游戏 / 涂鸦 / 拨球 / 切照片），
  * 不能再兼做「右滑返回」，否则两个动作会抢同一个手势。它们的退出都走标题栏返回键。 */
 static bool page_has_own_gesture(app_page_id_t page)
@@ -138,18 +142,45 @@ static lv_obj_t *page_build(app_page_id_t page)
     return scr;
 }
 
-static bool page_can_rotate(app_page_id_t page)
+static uint16_t normalize_rotation(int32_t deg)
 {
-    return page == PAGE_BOOKSHELF || page == PAGE_MUSIC || page == PAGE_READER;
+    return (deg == 270) ? 270 : 0;
+}
+
+static void rotation_state_load(void)
+{
+    s_rot_bookshelf = normalize_rotation(srv_config_get_int(CFG_ROT_BOOKSHELF, CFG_DEF_ROT));
+    s_rot_music = normalize_rotation(srv_config_get_int(CFG_ROT_MUSIC, CFG_DEF_ROT));
+    ESP_LOGI(TAG, "加载页面方向：书架/阅读器=%u°，音乐=%u°",
+             (unsigned)s_rot_bookshelf, (unsigned)s_rot_music);
+}
+
+static uint16_t *page_rotation_slot(app_page_id_t page)
+{
+    if (page == PAGE_MUSIC) {
+        return &s_rot_music;
+    }
+    if (page == PAGE_BOOKSHELF || page == PAGE_READER) {
+        return &s_rot_bookshelf;
+    }
+    return NULL;
+}
+
+static uint16_t page_rotation_for(app_page_id_t page)
+{
+    uint16_t *slot = page_rotation_slot(page);
+    return (slot != NULL) ? *slot : 0;
 }
 
 /* 创建并切换页面（调用前必须已持有 LVGL 锁）。
- * preserve_rotation=true 只用于「旋转当前可旋转页面后原地重建」；
- * 普通切页必须先恢复横屏，否则阅读器、设置等固定横屏页面会按竖屏尺寸构建而错位。 */
+ * 进页前先设置该页保存的方向，再构建页面，保证首次绘制就是正确逻辑尺寸；
+ * 非书架/音乐/阅读器页面固定使用 0° 横屏。 */
 static void switch_locked_ex(app_page_id_t page, nav_anim_t anim, bool preserve_rotation)
 {
-    if (!preserve_rotation && bsp_display_get_rotation() != 0) {
-        (void)bsp_display_set_rotation(0);
+    uint16_t desired = preserve_rotation ? bsp_display_get_rotation()
+                                         : page_rotation_for(page);
+    if (bsp_display_get_rotation() != desired) {
+        (void)bsp_display_set_rotation(desired);
     }
 
     lv_obj_t *scr = page_build(page);
@@ -190,6 +221,7 @@ void app_navigator_init(void)
     s_depth   = 0;
     s_current = PAGE_CLOCK;
     s_screen  = NULL;
+    rotation_state_load();
 
     if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) != ESP_OK) {
         ESP_LOGE(TAG, "获取 LVGL 锁失败，界面未初始化");
@@ -258,7 +290,8 @@ void app_navigator_hide(void)
 
 void app_navigator_toggle_page_rotation(void)
 {
-    if (!page_can_rotate(s_current)) {
+    uint16_t *slot = page_rotation_slot(s_current);
+    if (slot == NULL) {
         return;
     }
     if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) != ESP_OK) {
@@ -266,10 +299,13 @@ void app_navigator_toggle_page_rotation(void)
         return;
     }
 
-    uint16_t next = (bsp_display_get_rotation() == 0) ? 270 : 0;
+    uint16_t next = (*slot == 0) ? 270 : 0;
     esp_err_t ret = bsp_display_set_rotation(next);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "页面 %d 旋转到 %u°", (int)s_current, (unsigned)next);
+        *slot = next;
+        const char *key = (s_current == PAGE_MUSIC) ? CFG_ROT_MUSIC : CFG_ROT_BOOKSHELF;
+        (void)srv_config_set_int(key, next, true);
+        ESP_LOGI(TAG, "页面 %d 旋转到 %u° 并已保存", (int)s_current, (unsigned)next);
         switch_locked_ex(s_current, ANIM_NONE, true);
     } else {
         ESP_LOGE(TAG, "页面旋转失败: %s", esp_err_to_name(ret));
