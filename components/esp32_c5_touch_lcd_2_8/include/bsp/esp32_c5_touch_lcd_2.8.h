@@ -475,6 +475,25 @@ lv_display_t *bsp_display_get_disp_dev(void);
 lv_indev_t *bsp_display_get_input_dev(void);
 
 /**
+ * @brief 运行时设置屏幕旋转（相对默认横屏）
+ *
+ * 支持 0/90/180/270 度。实现同时更新 ST7789 MADCTL（swap_xy/mirror）
+ * 和 CST3530 触摸坐标映射，并由 LVGL 交换逻辑分辨率。
+ *
+ * 因为现有页面普遍使用绝对坐标，调用本函数后必须重新构建当前页面；
+ * 否则旧页面的几何尺寸仍然是旋转前的。
+ *
+ * @param degrees 0 / 90 / 180 / 270
+ * @return ESP_OK，或参数/状态错误
+ */
+esp_err_t bsp_display_set_rotation(uint16_t degrees);
+
+/**
+ * @brief 读取当前运行时旋转角度（0/90/180/270）
+ */
+uint16_t bsp_display_get_rotation(void);
+
+/**
  * @brief Take LVGL mutex
  *
  * @param timeout_ms Timeout in [ms]. 注意：底层 esp_lv_adapter_lock 的语义是

@@ -2,6 +2,7 @@
 #include "ui_common.h"
 #include "ui_icons.h"
 #include "ui_dialog.h"
+#include "ui_rotation_test.h"
 #include "app_navigator.h"
 #include "srv_config.h"
 #include "srv_safe.h"
@@ -102,6 +103,12 @@ static void on_reset_click(lv_event_t *e)
                       "重置", on_reset_ok, NULL);
 }
 
+static void on_rotation_test_click(lv_event_t *e)
+{
+    (void)e;
+    ui_rotation_test_show();
+}
+
 /* ---- 快速返回主页 / 安全模式（从设置主页挪过来） ---- */
 
 static void on_fast_home_switch(lv_event_t *e)
@@ -168,6 +175,12 @@ void ui_set_about_create(lv_obj_t *root)
     if (show_safe) {
         row = ui_row_create(list, UI_ROW_Y(next++), &ic_warning, "安全模式");
         (void)ui_row_switch_create(row, srv_safe_on(), on_safe_switch, NULL);
+    }
+
+    /* 开发验证入口：完整版设置里才显示，用来确认旋转/触摸映射。 */
+    if (full) {
+        row = ui_row_create(list, UI_ROW_Y(next++), &ic_setting, "屏幕旋转测试");
+        ui_row_btn_create(row, -8, 64, "测试", on_rotation_test_click, NULL);
     }
 
     /* 危险操作：文字标红，点了还要再确认一次 */

@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "esp_lcd_panel_st7789.h"
+#include "esp_lcd_touch.h"
 #include "esp_lcd_touch_cst3530.h"
 
 #include "esp_codec_dev_defaults.h"
@@ -33,6 +34,17 @@ sdmmc_card_t *bsp_sdcard = NULL;
 static esp_lcd_touch_handle_t tp = NULL;
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static esp_lcd_panel_io_handle_t io_handle = NULL;
+
+/* 当前 BSP 默认方向：横屏 320x240。
+ * 运行时旋转以这一组硬件方向为基准，而不是以 ST7789 原生竖屏为基准。 */
+#define BSP_LCD_BASE_SWAP_XY    (true)
+#define BSP_LCD_BASE_MIRROR_X   (true)
+#define BSP_LCD_BASE_MIRROR_Y   (false)
+
+static uint16_t s_display_rotation_deg = 0;
+static bool s_touch_base_swap_xy = true;
+static bool s_touch_base_mirror_x = true;
+static bool s_touch_base_mirror_y = false;
 static i2s_chan_handle_t i2s_tx_chan = NULL;
 static i2s_chan_handle_t i2s_rx_chan = NULL;
 static const audio_codec_data_if_t *i2s_data_if = NULL;
@@ -62,6 +74,167 @@ i2c_master_dev_handle_t shtc3_handle = NULL;
         .slot_cfg = I2S_STD_PHILIP_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO), \
         .gpio_cfg = BSP_I2S_GPIO_CFG,                                                                 \
     }
+
+/* ===================== 运行时方向计算 =====================
+ *
+ * 只使用 swap + mirror 两种硬件方向位。旋转角度通过矩阵组合后，
+ * 再反推出最接近的一组 swap/mirror 组合，避免手写 16 种分支。
+ */
+
+typedef struct {
+    int m00;
+    int m01;
+    int m10;
+    int m11;
+} bsp_orient_matrix_t;
+
+static bsp_orient_matrix_t orient_matrix_from_flags(bool swap_xy, bool mirror_x, bool mirror_y)
+{
+    int x_x = 1;
+    int x_y = 0;
+    int y_x = 0;
+    int y_y = 1;
+
+    if (swap_xy) {
+        int tmp_x = x_x;
+        int tmp_y = x_y;
+        x_x = y_x;
+        x_y = y_y;
+        y_x = tmp_x;
+        y_y = tmp_y;
+    }
+    if (mirror_x) {
+        x_x = -x_x;
+        x_y = -x_y;
+    }
+    if (mirror_y) {
+        y_x = -y_x;
+        y_y = -y_y;
+    }
+
+    bsp_orient_matrix_t m = {
+        .m00 = x_x, .m01 = y_x,
+        .m10 = x_y, .m11 = y_y,
+    };
+    return m;
+}
+
+static bsp_orient_matrix_t orient_matrix_multiply(bsp_orient_matrix_t lhs, bsp_orient_matrix_t rhs)
+{
+    bsp_orient_matrix_t result = {
+        .m00 = lhs.m00 * rhs.m00 + lhs.m01 * rhs.m10,
+        .m01 = lhs.m00 * rhs.m01 + lhs.m01 * rhs.m11,
+        .m10 = lhs.m10 * rhs.m00 + lhs.m11 * rhs.m10,
+        .m11 = lhs.m10 * rhs.m01 + lhs.m11 * rhs.m11,
+    };
+    return result;
+}
+
+static bsp_orient_matrix_t orient_matrix_for_rotation(lv_display_rotation_t rotation)
+{
+    switch (rotation) {
+    case LV_DISPLAY_ROTATION_90:
+        return orient_matrix_from_flags(true, true, false);
+    case LV_DISPLAY_ROTATION_180:
+        return orient_matrix_from_flags(false, true, true);
+    case LV_DISPLAY_ROTATION_270:
+        return orient_matrix_from_flags(true, false, true);
+    case LV_DISPLAY_ROTATION_0:
+    default:
+        return orient_matrix_from_flags(false, false, false);
+    }
+}
+
+static void orient_flags_for_rotation(lv_display_rotation_t rotation,
+                                      bool base_swap_xy, bool base_mirror_x, bool base_mirror_y,
+                                      bool *out_swap_xy, bool *out_mirror_x, bool *out_mirror_y)
+{
+    bsp_orient_matrix_t base = orient_matrix_from_flags(base_swap_xy, base_mirror_x, base_mirror_y);
+    bsp_orient_matrix_t rot = orient_matrix_for_rotation(rotation);
+    bsp_orient_matrix_t desired = orient_matrix_multiply(rot, base);
+
+    for (int swap = 0; swap <= 1; swap++) {
+        for (int mx = 0; mx <= 1; mx++) {
+            for (int my = 0; my <= 1; my++) {
+                bsp_orient_matrix_t candidate = orient_matrix_from_flags(swap, mx, my);
+                if (candidate.m00 == desired.m00 && candidate.m01 == desired.m01 &&
+                        candidate.m10 == desired.m10 && candidate.m11 == desired.m11) {
+                    *out_swap_xy = swap != 0;
+                    *out_mirror_x = mx != 0;
+                    *out_mirror_y = my != 0;
+                    return;
+                }
+            }
+        }
+    }
+
+    *out_swap_xy = base_swap_xy;
+    *out_mirror_x = base_mirror_x;
+    *out_mirror_y = base_mirror_y;
+}
+
+static uint16_t rotation_to_degrees(lv_display_rotation_t rotation)
+{
+    switch (rotation) {
+    case LV_DISPLAY_ROTATION_90:
+        return 90;
+    case LV_DISPLAY_ROTATION_180:
+        return 180;
+    case LV_DISPLAY_ROTATION_270:
+        return 270;
+    case LV_DISPLAY_ROTATION_0:
+    default:
+        return 0;
+    }
+}
+
+static void display_apply_orientation(lv_display_rotation_t rotation)
+{
+    if (panel_handle == NULL) {
+        return;
+    }
+
+    bool swap_xy = false;
+    bool mirror_x = false;
+    bool mirror_y = false;
+    orient_flags_for_rotation(rotation,
+                              BSP_LCD_BASE_SWAP_XY, BSP_LCD_BASE_MIRROR_X, BSP_LCD_BASE_MIRROR_Y,
+                              &swap_xy, &mirror_x, &mirror_y);
+
+    esp_err_t ret = esp_lcd_panel_swap_xy(panel_handle, swap_xy);
+    if (ret == ESP_OK) {
+        ret = esp_lcd_panel_mirror(panel_handle, mirror_x, mirror_y);
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "应用 LCD 旋转失败: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    if (tp != NULL) {
+        bool touch_swap = false;
+        bool touch_mx = false;
+        bool touch_my = false;
+        orient_flags_for_rotation(rotation,
+                                  s_touch_base_swap_xy, s_touch_base_mirror_x, s_touch_base_mirror_y,
+                                  &touch_swap, &touch_mx, &touch_my);
+        (void)esp_lcd_touch_set_swap_xy(tp, touch_swap);
+        (void)esp_lcd_touch_set_mirror_x(tp, touch_mx);
+        (void)esp_lcd_touch_set_mirror_y(tp, touch_my);
+    }
+
+    s_display_rotation_deg = rotation_to_degrees(rotation);
+    ESP_LOGI(TAG, "屏幕旋转：%u°，LCD swap=%d mirror=(%d,%d)",
+             (unsigned)s_display_rotation_deg, (int)swap_xy, (int)mirror_x, (int)mirror_y);
+}
+
+static void display_resolution_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    if (disp_drv == NULL) {
+        return;
+    }
+    display_apply_orientation(lv_display_get_rotation(disp_drv));
+}
 
 /**************************************************************************************************
  * I2C init
@@ -600,8 +773,9 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
      *   A: swap + mirror_x          90°CW（无镜像）
      *   B: swap + mirror_y          90°CW（另一方向）
      */
-    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));  /* MX=1, MY=0 */
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, BSP_LCD_BASE_SWAP_XY));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, BSP_LCD_BASE_MIRROR_X,
+                                         BSP_LCD_BASE_MIRROR_Y));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
@@ -675,7 +849,12 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
         },
         .tear_avoid_mode = cfg->tear_avoid_mode,
     };
-    return esp_lv_adapter_register_display(&disp_cfg);
+    lv_display_t *disp = esp_lv_adapter_register_display(&disp_cfg);
+    if (disp != NULL) {
+        lv_display_add_event_cb(disp, display_resolution_changed_cb,
+                                LV_EVENT_RESOLUTION_CHANGED, NULL);
+    }
+    return disp;
 }
 
 static lv_indev_t *bsp_display_indev_init(const bsp_display_cfg_t *cfg, lv_display_t *disp)
@@ -706,6 +885,9 @@ lv_display_t *bsp_display_start_with_config(bsp_display_cfg_t *cfg)
     lv_display_t *disp = bsp_display_lcd_init(cfg);
     BSP_NULL_CHECK(disp, NULL);
 
+    s_touch_base_swap_xy = cfg->touch_flags.swap_xy != 0;
+    s_touch_base_mirror_x = cfg->touch_flags.mirror_x != 0;
+    s_touch_base_mirror_y = cfg->touch_flags.mirror_y != 0;
     disp_indev = bsp_display_indev_init(cfg, disp);
     BSP_NULL_CHECK(disp_indev, NULL);
 
@@ -725,6 +907,44 @@ lv_display_t *bsp_display_get_disp_dev(void)
 lv_indev_t *bsp_display_get_input_dev(void)
 {
     return disp_indev;
+}
+
+esp_err_t bsp_display_set_rotation(uint16_t degrees)
+{
+    if (disp_drv == NULL || panel_handle == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    lv_display_rotation_t rotation = LV_DISPLAY_ROTATION_0;
+    if (degrees == 90) {
+        rotation = LV_DISPLAY_ROTATION_90;
+    } else if (degrees == 180) {
+        rotation = LV_DISPLAY_ROTATION_180;
+    } else if (degrees == 270) {
+        rotation = LV_DISPLAY_ROTATION_270;
+    }
+
+    esp_err_t ret = bsp_display_lock(1000);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    lv_display_set_rotation(disp_drv, rotation);
+    lv_obj_t *screen = lv_screen_active();
+    if (screen != NULL) {
+        lv_obj_invalidate(screen);
+    }
+
+    bsp_display_unlock();
+    return ESP_OK;
+}
+
+uint16_t bsp_display_get_rotation(void)
+{
+    return s_display_rotation_deg;
 }
 
 esp_err_t bsp_display_lock(uint32_t timeout_ms)

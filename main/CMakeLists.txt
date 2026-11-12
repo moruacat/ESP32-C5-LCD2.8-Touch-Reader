@@ -17,6 +17,7 @@ idf_component_register(
         "ui/ui_set_music.c"
         "ui/ui_set_bright.c"
         "ui/ui_set_about.c"
+        "ui/ui_rotation_test.c"
         "ui/ui_set_battery.c"
         "ui/ui_set_photo.c"
         "ui/ui_files.c"
