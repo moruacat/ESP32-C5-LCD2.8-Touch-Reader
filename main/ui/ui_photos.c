@@ -35,20 +35,30 @@ static const char *TAG = "ui_photos";
 #define BTN_W       110
 #define BTN_H       30
 
-/* ===== 缩略图网格：一页 8 张，横屏 4x2、竖屏 2x4，翻页切换 =====
- * 逐张缩略图从原图（320x240 RGB565）最近邻采样，一页 8 张约 62KB PSRAM。
- * 只建 8 个图片对象，几百张照片也不会把 LVGL 对象数撑爆。
- * 竖屏（240 宽）放不下 4 列 76px 的格子，改成 2 列 4 行，格子拉宽。 */
-#define GRID_PAGE   8
-#define GRID_COLS   ((ui_scr_w() < ui_scr_h()) ? 2 : 4)
-#define GRID_ROWS   (GRID_PAGE / GRID_COLS)
+/* ===== 缩略图网格：横屏 4x2（8 张）、竖屏 2x3（6 张），翻页切换 =====
+ * 逐张缩略图从原图（320x240 RGB565）最近邻采样，横屏一页 8 张约 62KB PSRAM，
+ * 竖屏一页 6 张约 76KB。
+ * 只建一页的图片对象，几百张照片也不会把 LVGL 对象数撑爆。
+ *
+ * 缩略图宽高比一律取原图的 4:3，横竖屏都正好整除、不裁剪 —— 竖屏原来用
+ * 108x50（2.16:1），thumb_make() 只能从 240 行里裁掉 92 行，边缘就缺一块。
+ * 注意：这里只改采样比例，**不旋转图像内容**，所以旋转屏幕后照片方向
+ * 和横屏时一致，只是排版从 4 列变 2 列。 */
 #define GRID_WIDE   (ui_scr_w() >= ui_scr_h())
-#define CELL_W      (GRID_WIDE ? 76 : 112)
-#define CELL_H      (GRID_WIDE ? 66 : 52)
-#define THUMB_W     (GRID_WIDE ? 72 : 108)
-#define THUMB_H     (GRID_WIDE ? 54 : 50)
+#define GRID_COLS   (GRID_WIDE ? 4 : 2)
+#define GRID_ROWS   (GRID_WIDE ? 2 : 3)
+#define GRID_PAGE   (GRID_COLS * GRID_ROWS)
+#define CELL_W      (GRID_WIDE ? 76 : 96)
+#define CELL_H      (GRID_WIDE ? 66 : 71)
+#define THUMB_W     (GRID_WIDE ? 72 : 92)     /*!< 均为 4:3，与源图同比 */
+#define THUMB_H     (GRID_WIDE ? 54 : 69)
 #define GRID_H      (GRID_ROWS * CELL_H + (GRID_ROWS - 1) * 4 + 4)
 #define GRID_Y      (ROLLER_Y)
+
+/*! 静态对象数组按最大页容量分配。
+ *  GRID_PAGE 依赖 ui_scr_w()（运行期才知道横竖屏），不能直接当数组维度；
+ *  横屏一页 8 张是最多的，竖屏那 6 张只用前几个。 */
+#define GRID_PAGE_MAX  (4 * 2)
 
 /*! 预读任务的栈：里面有 fopen/fread（SD 卡驱动也要用栈） */
 #define PRE_TASK_STACK  4096
@@ -71,10 +81,10 @@ static int        s_idx;            /*!< 当前全屏的是第几张 */
 
 /* 网格 */
 static lv_obj_t      *s_grid;
-static lv_obj_t      *s_grid_img[GRID_PAGE];
-static lv_obj_t      *s_grid_no[GRID_PAGE];
-static lv_image_dsc_t s_grid_dsc[GRID_PAGE];
-static uint8_t       *s_grid_buf[GRID_PAGE];
+static lv_obj_t      *s_grid_img[GRID_PAGE_MAX];
+static lv_obj_t      *s_grid_no[GRID_PAGE_MAX];
+static lv_image_dsc_t s_grid_dsc[GRID_PAGE_MAX];
+static uint8_t       *s_grid_buf[GRID_PAGE_MAX];
 static int            s_page;
 static int            s_page_count;
 static lv_obj_t      *s_page_lb;
@@ -338,7 +348,11 @@ static void open_index(int idx);        /* 实现在全屏视图一节后面 */
 
 static void grid_free(void)
 {
-    for (int i = 0; i < GRID_PAGE; i++) {
+    /* 这里必须按 GRID_PAGE_MAX 扫，不能用 GRID_PAGE。
+     * 旋转页面时 app_navigator 先 bsp_display_set_rotation() 改方向、再异步删除旧页面，
+     * 等这个回调跑起来 ui_scr_w() 已经是新方向：横屏建的 8 张、竖屏按 6 张释放，
+     * 后面两块的缓冲就漏了。free(NULL) 安全，直接按最大容量清一遍。 */
+    for (int i = 0; i < GRID_PAGE_MAX; i++) {
         if (s_grid_buf[i] != NULL) {
             lv_image_cache_drop(&s_grid_dsc[i]);
             free(s_grid_buf[i]);
@@ -347,8 +361,10 @@ static void grid_free(void)
     }
 }
 
-/* 最近邻采样：横屏整图 320x240 -> 72x54；竖屏 2 列时目标更宽扁，
- * 取原图中间一块（裁掉上下）再缩，避免照片被压扁。 */
+/* 最近邻采样：原图 320x240 → 缩略图。
+ * 缩略图宽高比固定取 4:3（横屏 72x54、竖屏 92x69），和源图完全同比，
+ * 所以下面的 crop_w/crop_h 恒等于原图尺寸，走「整图缩放、不裁剪」那条路；
+ * 保留这段比例计算是为了将来改格子尺寸时仍按比例裁缺而不是把照片压扁。 */
 static void thumb_make(const uint8_t *src, uint8_t *dst)
 {
     int crop_w = SRV_PHOTO_W;
@@ -603,7 +619,8 @@ static void photos_root_del_cb(lv_event_t *e)
     s_roller   = NULL;
     s_grid     = NULL;
     s_page_lb  = NULL;
-    for (int i = 0; i < GRID_PAGE; i++) {
+    /* 同样按最大容量清：旋转后 GRID_PAGE 已经变小，按它清会留下野指针 */
+    for (int i = 0; i < GRID_PAGE_MAX; i++) {
         s_grid_img[i] = NULL;
         s_grid_no[i]  = NULL;
     }
@@ -669,13 +686,16 @@ void ui_photos_create(lv_obj_t *root)
     lv_obj_set_style_pad_all(s_grid, 0, 0);
     lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
 
+    /* 网格横向居中：竖屏只有 2 列，沿用硬编码的 4px 左偏移会挤在一边 */
+    const lv_coord_t grid_x0 = (ui_scr_w() - (GRID_COLS * CELL_W + (GRID_COLS - 1) * 4)) / 2;
+
     for (int i = 0; i < GRID_PAGE; i++) {
         const int col = i % GRID_COLS;
         const int row = i / GRID_COLS;
 
         lv_obj_t *cell = lv_button_create(s_grid);
         lv_obj_set_size(cell, CELL_W, CELL_H);
-        lv_obj_set_pos(cell, 4 + col * (CELL_W + 4), 2 + row * (CELL_H + 4));
+        lv_obj_set_pos(cell, grid_x0 + col * (CELL_W + 4), 2 + row * (CELL_H + 4));
         lv_obj_set_style_radius(cell, 6, 0);
         lv_obj_set_style_bg_color(cell, UI_COLOR_SURFACE, 0);
         lv_obj_set_style_shadow_width(cell, 0, 0);
