@@ -4,6 +4,7 @@ idf_component_register(
         "app/app_init.c"
         "app/app_navigator.c"
         "ui/ui_common.c"
+        "ui/ui_oobe.c"
         "ui/ui_clock.c"
         "ui/ui_home.c"
         "ui/ui_func.c"
