@@ -65,9 +65,9 @@ _Static_assert(OOBE_N >= 4, "OOBE_TEXT 至少 4 个字符（收尾提前量取�
 typedef struct {
     lv_obj_t  *block;    /*!< 正面：圆角方块 */
     lv_obj_t  *text;     /*!< 背面：单个字母 */
-    lv_coord_t x_grid;   /*!< 收紧前的网格 x */
+    lv_coord_t x_start;  /*!< 收紧前的渲染 x（字符在 22px 格子里的居中位置） */
     lv_coord_t x_nat;    /*!< 收紧后的自然排版 x */
-    lv_coord_t w_nat;    /*!< 字母自然宽度（收紧终点） */
+    lv_coord_t w_nat;    /*!< 字母自然宽度（创建时就固定成这个宽度，全程不改） */
 } oobe_item_t;
 
 /*! 单字的时间点 */
@@ -86,6 +86,9 @@ typedef struct {
 static lv_obj_t   *s_screen;         /*!< OOBE 自己的那一屏 */
 static lv_obj_t   *s_prev_screen;    /*!< 播完要切回去的页面 */
 static lv_timer_t *s_watchdog;       /*!< 兜底：动画回调没跑到也要收尾 */
+static lv_timer_t *s_probe;          /*!< 帧率探针：数动画期间 LVGL 处理了多少个刷新周期 */
+static uint32_t    s_probe_frames;
+static uint32_t    s_expect_ms;      /*!< 本轮动画的标称总时长，用来算满帧数 */
 static oobe_item_t s_items[OOBE_N];
 static oobe_timing_t s_tm[OOBE_N];
 static uint32_t    s_rest_at;        /*!< 字距收紧的起点 */
@@ -161,19 +164,35 @@ static void exec_text_flip(void *var, int32_t v)
     lv_obj_set_style_opa(o, oobe_opa(v), 0);
 }
 
-/*! 字距收紧：格子的 x 与宽度一起动，字符靠 text_align=center 自己保持居中 */
+/*! 字距收紧：只动 x。
+ *
+ *  这里是整段动画最大的性能雷区：给 label 改宽度会触发
+ *  lv_obj_refresh_self_size() —— 只要宽或高有一个是 LV_SIZE_CONTENT 它就
+ *  lv_obj_mark_layout_as_dirty()，把 **整个屏幕**标记成布局脏（scr_layout_inv），
+ *  下一帧 layout_update_core() 递归遍历整屏对象树、把每个脏对象的尺寸和位置
+ *  重算一遍，label 还会顺便把文本宽度重新测量一次。11 个字 × 42 帧 = 462 次
+ *  全屏重排，帧率必崩。
+ *
+ *  所以 label 的宽高在创建时就固定成「自然宽度 × 行高」，全程不变；
+ *  收紧只移动 x —— 绝对定位不参与布局，只会 invalidate 那两个小矩形。 */
 static void exec_rest(void *var, int32_t v)
 {
     oobe_item_t *it = (oobe_item_t *)var;
     if (it->text == NULL) {
         return;
     }
-    lv_obj_set_x(it->text, it->x_grid + ((it->x_nat - it->x_grid) * v) / 1000);
-    lv_obj_set_width(it->text, OOBE_CELL + ((it->w_nat - OOBE_CELL) * v) / 1000);
+    lv_obj_set_x(it->text, it->x_start + ((it->x_nat - it->x_start) * v) / 1000);
 }
 
-/*! 整屏淡出（连黑底一起），走完这一屏就该消失了 */
-static void exec_fade(void *var, int32_t v)
+/*! 单个字符淡出。
+ *
+ *  这里特意**不**对整屏做 opa 动画：屏幕 320x240，LCD 走 40MHz SPI，绘制缓冲
+ *  只有 4800 像素（约 15 行）高，整屏刷新要分 12 次 flush ≈ 30ms —— 一帧就吃掉
+ *  两个 LVGL 刷新周期，220ms 的整屏淡出只能画出六七帧，肉眼就是一顿。
+ *  只淡出 11 个字母时脏区是 272x29，两次 flush 就够，成本差一个数量级。
+ *
+ *  背景本来就是纯黑，时钟页也是纯黑，所以最后直接切屏不会有颜色跳变。 */
+static void exec_fade_item(void *var, int32_t v)
 {
     lv_obj_set_style_opa((lv_obj_t *)var, oobe_opa(1000 - v), 0);
 }
@@ -231,7 +250,7 @@ static void oobe_stop_anims(void)
     lv_anim_delete(NULL, exec_block_flip);
     lv_anim_delete(NULL, exec_text_flip);
     lv_anim_delete(NULL, exec_rest);
-    lv_anim_delete(NULL, exec_fade);
+    lv_anim_delete(NULL, exec_fade_item);
 }
 
 /**
@@ -247,6 +266,15 @@ static void oobe_teardown(void)
     if (s_watchdog != NULL) {
         lv_timer_delete(s_watchdog);
         s_watchdog = NULL;
+    }
+
+    if (s_probe != NULL) {
+        lv_timer_delete(s_probe);
+        s_probe = NULL;
+        const uint32_t full = s_expect_ms / 15u;      /* LV_DEF_REFR_PERIOD */
+        ESP_LOGI(TAG, "刷新周期 %u / 满帧 %u（约 %u%%）",
+                 (unsigned)s_probe_frames, (unsigned)full,
+                 (unsigned)(full ? (s_probe_frames * 100u) / full : 0u));
     }
 
     lv_obj_t *scr  = s_screen;
@@ -275,6 +303,16 @@ static void on_fade_done(lv_anim_t *a)
     oobe_teardown();
 }
 
+/*! 帧率探针：每被 LVGL 调度一次就 +1。
+ *  它的周期就是 LVGL 的刷新周期（LV_DEF_REFR_PERIOD = 15ms），所以
+ *  「实际触发次数 / 标称总时长 ÷ 15」就是这段时间的帧率占比。
+ *  动画是按 tick 时间推进的，卡顿只会丢帧不会拉长总时长，光看总耗时看不出问题。 */
+static void on_probe(lv_timer_t *t)
+{
+    (void)t;
+    s_probe_frames++;
+}
+
 /*! 兜底：万一淡出动画因为卡顿丢了帧、或者别的原因没跑到 completed_cb，
  *  到点也强制收尾，绝不让这一屏留在屏幕上拖累刷新率。 */
 static void on_watchdog(lv_timer_t *t)
@@ -294,8 +332,22 @@ typedef enum {
     OOBE_CURVE_IN_OUT,   /*!< 字距收紧：(0.65, 0, 0.35, 1) */
 } oobe_curve_t;
 
+/*! 方块翻到 90° 之后就没用了：复位 scale 并隐藏。
+ *  不复位的话它会一直以 LV_LAYER_TYPE_TRANSFORM 的身份留在对象树里，
+ *  后续每一帧都要为它算绘制区域（虽然 opa=0 不会真画），没必要。 */
+static void on_block_flipped(lv_anim_t *a)
+{
+    lv_obj_t *o = (lv_obj_t *)a->var;
+    if (o == NULL) {
+        return;
+    }
+    lv_obj_set_style_transform_scale_x(o, LV_SCALE_NONE, 0);
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void oobe_anim_start(void *var, lv_anim_exec_xcb_t cb,
-                            uint32_t delay, uint32_t dur, oobe_curve_t curve)
+                            uint32_t delay, uint32_t dur, oobe_curve_t curve,
+                            lv_anim_completed_cb_t done)
 {
     if (dur == 0) {
         dur = 1;                      /* 时长 0 在 LVGL 里会立刻跳到终值，没有意义 */
@@ -320,6 +372,10 @@ static void oobe_anim_start(void *var, lv_anim_exec_xcb_t cb,
     default:
         oobe_bezier(&a, 0.65f, 0.0f, 0.35f, 1.0f);
         break;
+    }
+
+    if (done != NULL) {
+        lv_anim_set_completed_cb(&a, done);
     }
 
     lv_anim_start(&a);
@@ -388,23 +444,30 @@ void ui_oobe_play(void)
         lv_obj_set_style_translate_y(block, OOBE_RISE_PX, 0);
         oobe_flip_pivot(block);
 
+        /* 字符在 22px 格子里居中 —— 这个位置就是收紧动画的起点，
+         * 宽度固定成自然宽度后它和原来的「MinWidth=32 + 居中」是等效的。 */
+        const lv_coord_t w_nat   = oobe_text_width(ch);
+        const lv_coord_t x_start = x + (OOBE_CELL - w_nat) / 2;
+
         lv_obj_t *text = lv_label_create(s_screen);
         lv_label_set_text(text, ch);
         lv_obj_set_style_text_font(text, OOBE_FONT, 0);
         lv_obj_set_style_text_color(text, UI_COLOR_TEXT, 0);
-        lv_obj_set_style_text_align(text, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_all(text, 0, 0);
-        lv_obj_set_width(text, OOBE_CELL);                      /* 字格强制等宽，这是对齐的前提 */
-        lv_obj_set_pos(text, x, text_y);
+        /* 宽高一次性固定死。只要有一个维度留在 LV_SIZE_CONTENT，
+         * 后面的 lv_obj_set_width() 就会走 lv_obj_mark_layout_as_dirty()，
+         * 把整屏标记成布局脏 —— 那是每帧一次全屏重排，帧率直接崩。 */
+        lv_obj_set_size(text, w_nat, font_h);
+        lv_obj_set_pos(text, x_start, text_y);
         lv_obj_set_style_opa(text, LV_OPA_TRANSP, 0);
         lv_obj_set_style_transform_scale_x(text, 0, 0);         /* 字母一开始侧对屏幕 */
         oobe_flip_pivot(text);
 
-        s_items[i].block  = block;
-        s_items[i].text   = text;
-        s_items[i].x_grid = x;
-        s_items[i].w_nat  = oobe_text_width(ch);
-        nat_total += s_items[i].w_nat;
+        s_items[i].block   = block;
+        s_items[i].text    = text;
+        s_items[i].x_start = x_start;
+        s_items[i].w_nat   = w_nat;
+        nat_total += w_nat;
     }
 
     /* ---- 收紧终点：按真实字宽重新排一遍并居中 ---- */
@@ -437,34 +500,27 @@ void ui_oobe_play(void)
 
         /* 方块上浮 + 淡入 */
         oobe_anim_start(s_items[i].block, exec_rise,
-                        t->rise_at, t->rise_ms, OOBE_CURVE_OUT);
+                        t->rise_at, t->rise_ms, OOBE_CURVE_OUT, NULL);
 
-        /* 方块翻走（0→90°） */
+        /* 方块翻走（0→90°），翻完就把它藏掉 */
         oobe_anim_start(s_items[i].block, exec_block_flip,
-                        t->flip_at, t->flip_ms, OOBE_CURVE_IN);
+                        t->flip_at, t->flip_ms, OOBE_CURVE_IN, on_block_flipped);
 
         /* 字母翻入（−90°→0°），接在方块翻完之后 */
         oobe_anim_start(s_items[i].text, exec_text_flip,
-                        t->text_at, t->flip_ms, OOBE_CURVE_OUT);
+                        t->text_at, t->flip_ms, OOBE_CURVE_OUT, NULL);
 
         /* 字距收紧 */
         oobe_anim_start(&s_items[i], exec_rest,
-                        s_rest_at, OOBE_REST_MS, OOBE_CURVE_IN_OUT);
+                        s_rest_at, OOBE_REST_MS, OOBE_CURVE_IN_OUT, NULL);
     }
 
-    /* ---- 整屏淡出，走完就切回原页面 ---- */
+    /* ---- 收尾：只淡出字母，最后一条走完就切回原页面 ---- */
     const uint32_t total_ms = s_rest_at + OOBE_REST_MS + OOBE_FADE_MS;
-    {
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, s_screen);
-        lv_anim_set_exec_cb(&a, exec_fade);
-        lv_anim_set_values(&a, 0, 1000);
-        lv_anim_set_delay(&a, s_rest_at + OOBE_REST_MS);
-        lv_anim_set_duration(&a, OOBE_FADE_MS);
-        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-        lv_anim_set_completed_cb(&a, on_fade_done);
-        lv_anim_start(&a);
+    const uint32_t fade_at  = s_rest_at + OOBE_REST_MS;
+    for (int i = 0; i < OOBE_N; i++) {
+        oobe_anim_start(s_items[i].text, exec_fade_item, fade_at, OOBE_FADE_MS,
+                        OOBE_CURVE_IN_OUT, (i == 0) ? on_fade_done : NULL);
     }
 
     /* 兜底定时器：给整段留 1.5 秒余量。卡顿严重的机器上宁可硬收，也不留残影 */
@@ -472,6 +528,11 @@ void ui_oobe_play(void)
     if (s_watchdog != NULL) {
         lv_timer_set_repeat_count(s_watchdog, 1);
     }
+
+    /* 帧率探针（只在日志里用，成本是一年几十次加法） */
+    s_expect_ms = total_ms;
+    s_probe_frames = 0;
+    s_probe = lv_timer_create(on_probe, 15, NULL);
 
     ESP_LOGI(TAG, "%d 格字标：总时长 %ums（收紧 %ums 起 %ums，淡出 %ums）",
              OOBE_N, (unsigned)total_ms,
