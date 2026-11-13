@@ -125,32 +125,30 @@ void app_init_all(void)
     bsp_display_brightness_init();
     bsp_display_brightness_set((int)srv_config()->brightness);
 
-    /* 7. 导航器 + UI 初始化（内部装主题并进入时钟页） */
-    app_navigator_init();
+    /* 7. BOOT 键 / 闹钟提示 / 休眠，全部在建页面之前备好。
+     *    开机动画在下一步的 app_navigator_init() 里启动，动画一旦开跑，
+     *    后面就不该再有初始化来抢单核 CPU（见下面第 8 步的说明）。 */
+    srv_input_init();                   /* BOOT 键：GPIO28 轮询 + 去抖 + 状态机 */
+    ui_alarm_alert_init();              /* 闹钟响铃提示（注册回调，不建对象） */
+    ui_sleep_init();                    /* 休眠层 + 自动变暗/锁屏（持锁改对象树） */
 
-    /* 8. BOOT 键服务（GPIO28 轮询 + 去抖 + 短按/双击/长按状态机）。
-     *    用途：闹钟响铃时停铃、平时切换休眠（见 8.1 / 8.2）。 */
-    srv_input_init();
-
-    /* 8.1 闹钟响铃提示：屏幕上弹「停止」，也可以按 BOOT 键停铃 */
-    ui_alarm_alert_init();
-
-    /* 8.2 休眠：BOOT 键关屏/唤醒（响铃时该键优先停铃），点屏幕也能唤醒 */
-    ui_sleep_init();
-
-    /* 注：开机动画不在这里，它在 app_navigator_init() 里紧跟着切页启动 ——
-     * 放到这里会让时钟页先被渲染出来闪一帧。这里几个 UI 初始化已经全部
-     * 改成持锁操作（见 ui_sleep_init），不会再和渲染线程撞车。 */
-
-    /* 9. 按配置开启网络，并启动 NTP 自动校时流程
-     *    注：调试用的串口命令行已经撤掉（功能改由 UI 提供），
-     *    但 ESP_LOG 日志照旧从 USB-Serial-JTAG 输出，接线看日志仍然可用。 */
+    /* 8. 按配置开网络并启动 NTP 校时。
+     *
+     *    这一步必须放在开机动画**之前**：WiFi 驱动初始化要跑 PHY 校准，
+     *    实测 3500→4100ms 之间占了 560ms 左右，而 C5 是单核 —— 动画和它
+     *    并发时 LVGL 任务几乎抢不到时间，前几个方块的飞入会整段丢掉，
+     *    看着就是「卡片瞬移」。压在动画前，这段开销正好落在进入动画前的
+     *    黑屏期里，用户感知不到。 */
     if (srv_config_get_int(CFG_WIFI_EN, 0) != 0) {
         srv_wifi_set_enabled(true);     /* 内部会按网络历史自动连接 */
         srv_ntp_autostart();
     } else {
         ESP_LOGI(TAG, "网络开关为关，跳过联网与 NTP");
     }
+
+    /* 9. 导航器 + UI 初始化：装主题、进时钟页、紧接着启动开机动画。
+     *    放最后：动画开跑之后不希望再有初始化来抢 CPU 或抢 LVGL 锁。 */
+    app_navigator_init();
 
     ESP_LOGI(TAG, "system init done");
 }
