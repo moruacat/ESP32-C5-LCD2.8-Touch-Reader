@@ -53,6 +53,19 @@ static const char *TAG = "ui_oobe";
 extern const lv_font_t lv_font_montserrat_24;
 #define OOBE_FONT         (&lv_font_montserrat_24)
 
+/*! 翻牌是否使用「横向压缩」（LVGL 的 transform 图层）。
+ *
+ *  实测数据：LVGL 9.5 在这套配置下（CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0，
+ *  transform layer 的缓冲全部落在 PSRAM），每帧约 5.6KB 的图层缓冲不回收，
+ *  一轮 2.65 秒 ≈ 986KB。重播四轮就把 3.8MB PSRAM 吃光，症状是
+ *  「每次重播都更卡一点，第四次不动了 + task_wdt 报 CPU 0: lvgl」。
+ *
+ *  置 0 改用「方块淡出 → 字母淡入」的交叉淡化：全程不创建图层，零泄漏，
+ *  代价是少了横向压缩那一层立体感（节奏、错峰、字距收紧都保留）。
+ *  想换回真翻牌就把这里改回 1 —— 但请把「关于」页的重播按钮当成消耗品，
+ *  播两三轮就得重启。 */
+#define OOBE_USE_FLIP     0
+
 /*! 字符数（编译期从字符串长度得出，不含结尾 0） */
 #define OOBE_N            ((int)(sizeof(OOBE_TEXT) - 1))
 
@@ -126,6 +139,7 @@ static lv_opa_t oobe_opa(int32_t v)
     return (lv_opa_t)((v * LV_OPA_COVER) / 1000);
 }
 
+#if OOBE_USE_FLIP
 /*! 铰链贴在左边框：翻牌时左边不动、右边向里收，像一扇往左开的门。
  *  原版是 RenderTransformOrigin="0, 12"（32 高的 37.5%），这里照抄比例。
  *  注：LVGL 没有 3D 透视，纯 scale_x 压缩看上去是「压扁」而不是「近大远小」，
@@ -135,6 +149,7 @@ static void oobe_flip_pivot(lv_obj_t *o)
     lv_obj_set_style_transform_pivot_x(o, 0, 0);          /* 0 = 像素 0，即左边框 */
     lv_obj_set_style_transform_pivot_y(o, OOBE_PIVOT_Y, 0);
 }
+#endif
 
 /*! 单个字符的排版宽度（用来算收紧终点） */
 static lv_coord_t oobe_text_width(const char *s)
@@ -180,7 +195,9 @@ static void exec_rise(void *var, int32_t v)
 static void exec_block_flip(void *var, int32_t v)
 {
     lv_obj_t *o = (lv_obj_t *)var;
+#if OOBE_USE_FLIP
     lv_obj_set_style_transform_scale_x(o, (LV_SCALE_NONE * (1000 - v)) / 1000, 0);
+#endif
     lv_obj_set_style_opa(o, oobe_opa(1000 - v), 0);
 }
 
@@ -188,7 +205,9 @@ static void exec_block_flip(void *var, int32_t v)
 static void exec_text_flip(void *var, int32_t v)
 {
     lv_obj_t *o = (lv_obj_t *)var;
+#if OOBE_USE_FLIP
     lv_obj_set_style_transform_scale_x(o, (LV_SCALE_NONE * v) / 1000, 0);
+#endif
     lv_obj_set_style_opa(o, oobe_opa(v), 0);
 }
 
@@ -419,7 +438,9 @@ static void on_block_flipped(lv_anim_t *a)
     if (o == NULL) {
         return;
     }
+#if OOBE_USE_FLIP
     lv_obj_set_style_transform_scale_x(o, LV_SCALE_NONE, 0);
+#endif
     lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -536,7 +557,9 @@ void ui_oobe_play(void)
         lv_obj_set_style_pad_all(block, 0, 0);
         lv_obj_set_style_opa(block, LV_OPA_TRANSP, 0);          /* 起始隐藏交给动画兜 */
         lv_obj_set_style_translate_y(block, OOBE_RISE_PX, 0);
+#if OOBE_USE_FLIP
         oobe_flip_pivot(block);
+#endif
 
         /* 字符在 22px 格子里居中 —— 这个位置就是收紧动画的起点，
          * 宽度固定成自然宽度后它和原来的「MinWidth=32 + 居中」是等效的。 */
@@ -554,8 +577,10 @@ void ui_oobe_play(void)
         lv_obj_set_size(text, w_nat, font_h);
         lv_obj_set_pos(text, x_start, text_y);
         lv_obj_set_style_opa(text, LV_OPA_TRANSP, 0);
+#if OOBE_USE_FLIP
         lv_obj_set_style_transform_scale_x(text, 0, 0);         /* 字母一开始侧对屏幕 */
         oobe_flip_pivot(text);
+#endif
 
         s_items[i].block   = block;
         s_items[i].text    = text;
