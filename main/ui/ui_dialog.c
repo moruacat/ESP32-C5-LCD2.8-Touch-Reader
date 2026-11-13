@@ -236,13 +236,17 @@ void ui_dialog_confirm(const char *title, const char *note, const char *ok_text,
     s_ok_cb  = ok_cb;
     s_ok_arg = arg;
 
-    lv_obj_t *box = panel_create(mask, (ui_scr_w() < 252) ? (ui_scr_w() - 8) : 244, 134);
+    /* 面板宽度直接用这里算好的值，不要回头问 lv_obj_get_width(box)：
+     * LVGL 只在渲染前才计算布局，刚建出来的对象坐标还是 0，返回 0 会让
+     * 按钮宽度算成负数（-(36/2)），于是「只有按钮不见了」。 */
+    const lv_coord_t pw = (ui_scr_w() < 252) ? (ui_scr_w() - 8) : 244;
+    lv_obj_t *box = panel_create(mask, pw, 134);
     add_text(box, title, UI_COLOR_TEMP, 18, 1);
     add_text(box, note, UI_COLOR_TEXT_DIM, 46, 2);
 
     /* 取消仍在右侧、保持原来的主色；真正执行动作的按钮改成红色警示。
-     * 两个按钮都用绝对坐标（面板高 134 已知），不再依赖底部对齐 —— 见 add_btn_pos 的说明。 */
-    lv_coord_t w = (lv_obj_get_width(box) - 36) / 2;
+     * 两个按钮都用绝对坐标（面板宽高已知），不依赖对齐计算。 */
+    lv_coord_t w = (pw - 36) / 2;
     if (w > 96) {
         w = 96;
     }
@@ -257,14 +261,9 @@ void ui_dialog_confirm(const char *title, const char *note, const char *ok_text,
         lv_obj_set_style_text_color(ok_lb, lv_color_white(), 0);
     }
 
-    add_btn_pos(box, (lv_obj_get_width(box) - 12 - w), btn_y, w, true,
-                "取消", close_cb, mask);
+    add_btn_pos(box, pw - 12 - w, btn_y, w, true, "取消", close_cb, mask);
 
-    /* 按钮「看不见」的排查点：box 高度异常（比如 0）就会让底部对齐把按钮推出屏幕。
-     * 改成绝对定位后按钮不再依赖这个值，但日志留着便于确认根因。 */
-    ESP_LOGI(TAG, "confirm: box=%dx%d btn_w=%d children=%u",
-             (int)lv_obj_get_width(box), (int)lv_obj_get_height(box), (int)w,
-             (unsigned)lv_obj_get_child_count(box));
+    ESP_LOGI(TAG, "confirm: panel=%dx%d btn_w=%d", (int)pw, 134, (int)w);
 }
 
 /* ===================== 提示层 ===================== */

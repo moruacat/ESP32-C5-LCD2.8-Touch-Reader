@@ -16,7 +16,6 @@
 #include "srv_input.h"
 #include "srv_wifi.h"
 #include "srv_ntp.h"
-#include "srv_ota.h"
 #include "srv_hist.h"
 #include "srv_audio.h"
 #include "srv_alarm.h"
@@ -29,9 +28,6 @@
 #include "ui_alarm_alert.h"
 #include "ui_ime.h"
 #include "ui_sleep.h"
-#include "ui_ota_progress.h"
-
-#include "esp_ota_ops.h"
 
 static const char *TAG = "app_init";
 
@@ -158,11 +154,6 @@ void app_init_all(void)
     srv_wifi_init();
     srv_ntp_init();
 
-    /* 5.8 局域网 OTA（见 docs/ota_eval.md）
-     *     只起一个 2 秒轮询的监控任务：WiFi 连上才启动 mDNS + HTTP 服务，
-     *     断开就停掉，不常驻占用射频和内存。 */
-    srv_ota_init();
-
     /* 6. 显示 + LVGL（内部创建 LVGL 任务） */
     if (bsp_display_start() == NULL) {
         ESP_LOGE(TAG, "display start failed");
@@ -176,7 +167,6 @@ void app_init_all(void)
     srv_input_init();                   /* BOOT 键：GPIO28 轮询 + 去抖 + 状态机 */
     ui_alarm_alert_init();              /* 闹钟响铃提示（注册回调，不建对象） */
     ui_sleep_init();                    /* 休眠层 + 自动变暗/锁屏（持锁改对象树） */
-    ui_ota_progress_init();             /* 局域网 OTA 进度层（默认隐藏，推送时自动浮现） */
 
     /* 8. 导航器 + UI 初始化：装主题、进时钟页、紧接着启动开机动画。
      *    放最后：动画开跑之后不希望再有初始化来抢 CPU 或抢 LVGL 锁。 */
@@ -193,16 +183,6 @@ void app_init_all(void)
         }
     } else {
         ESP_LOGI(TAG, "网络开关为关，跳过联网与 NTP");
-    }
-
-    /* 10. OTA 回滚保护
-     *     从 OTA 分区启动的新固件会带「待验证」标记，bootloader 下次重启时
-     *     如果它还没被标记有效，就会自动回滚到上一个分区。能走到这里说明
-     *     显示、存储、网络、UI 都已经初始化完成，可以认为这份固件能用了。 */
-    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-        const esp_partition_t *running = esp_ota_get_running_partition();
-        ESP_LOGI(TAG, "当前运行分区：%s（OTA 校验通过，已标记有效）",
-                 running ? running->label : "?");
     }
 
     ESP_LOGI(TAG, "system init done");
