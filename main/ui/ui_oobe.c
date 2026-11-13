@@ -1,6 +1,7 @@
 #include "ui_oobe.h"
 #include "ui_common.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 #include <math.h>
 #include <string.h>
@@ -54,6 +55,10 @@ extern const lv_font_t lv_font_montserrat_24;
 
 /*! 字符数（编译期从字符串长度得出，不含结尾 0） */
 #define OOBE_N            ((int)(sizeof(OOBE_TEXT) - 1))
+
+/*! 置 0 可以整段跳过开机动画。排查「是不是它拖慢了整机」时最省事的一刀：
+ *  改这一个数字重编译，其余代码不用动。 */
+#define OOBE_ENABLE       1
 
 _Static_assert(OOBE_N >= 4, "OOBE_TEXT 至少 4 个字符（收尾提前量取的是倒数第 3 个）");
 
@@ -131,6 +136,23 @@ static lv_coord_t oobe_text_width(const char *s)
     lv_point_t sz = { 0, 0 };
     lv_text_get_size(&sz, s, OOBE_FONT, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     return (lv_coord_t)sz.x;
+}
+
+/*! 下面两个计数函数定义在生命周期那一节，这里先声明 */
+static uint32_t oobe_count_timers(void);
+static uint32_t oobe_count_objs(const lv_obj_t *o);
+
+/*! 收尾后复查一次：隔 3 秒再数一遍。两次数据一样说明干净，
+ *  对象数/定时器数还在涨就是泄漏 —— 那才是「整机一直卡」的典型症状。 */
+static void on_diag_late(lv_timer_t *t)
+{
+    lv_timer_delete(t);
+    ESP_LOGI(TAG, "3 秒后：动画=%u 定时器=%u 活动屏对象=%u 内部RAM=%u PSRAM=%u",
+             (unsigned)lv_anim_count_running(),
+             (unsigned)oobe_count_timers(),
+             (unsigned)oobe_count_objs(lv_screen_active()),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
 
 /* ============================================================================
@@ -253,8 +275,32 @@ static void oobe_stop_anims(void)
     lv_anim_delete(NULL, exec_fade_item);
 }
 
+/*! 数一下当前 LVGL 里的定时器个数（诊断用，见 oobe_teardown） */
+static uint32_t oobe_count_timers(void)
+{
+    uint32_t n = 0;
+    for (lv_timer_t *t = lv_timer_get_next(NULL); t != NULL; t = lv_timer_get_next(t)) {
+        n++;
+    }
+    return n;
+}
+
+/*! 递归数对象树（诊断用） */
+static uint32_t oobe_count_objs(const lv_obj_t *o)
+{
+    if (o == NULL) {
+        return 0;
+    }
+    uint32_t n = 1;
+    const uint32_t cnt = lv_obj_get_child_count(o);
+    for (uint32_t i = 0; i < cnt; i++) {
+        n += oobe_count_objs(lv_obj_get_child(o, (int32_t)i));
+    }
+    return n;
+}
+
 /**
- * @brief 收尾：清动画、清看门狗、切回原页面、删掉 OOBE 屏
+ * @brief 收尾：清动画、清定时器、切回原页面、删掉 OOBE 屏
  *
  * 顺序很重要：先把屏幕切回去，再删 OOBE 屏。否则当前活动屏被删掉时，
  * LVGL 会落到一个没有 screen 的状态，表现为整屏黑掉或者花屏。
@@ -291,6 +337,21 @@ static void oobe_teardown(void)
     }
 
     memset(s_items, 0, sizeof(s_items));
+
+    /* 收尾体检：这三个数都该回到「动画开始前」的水平。
+     * 动画残留 / 定时器没删 / 堆被吃光，都会在这里露出来 ——
+     * 「整机一直卡」基本都出在这一步没做干净。 */
+    ESP_LOGI(TAG, "收尾：动画=%u 定时器=%u 活动屏对象=%u 内部RAM=%u PSRAM=%u",
+             (unsigned)lv_anim_count_running(),
+             (unsigned)oobe_count_timers(),
+             (unsigned)oobe_count_objs(lv_screen_active()),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+    lv_timer_t *late = lv_timer_create(on_diag_late, 3000, NULL);
+    if (late != NULL) {
+        lv_timer_set_repeat_count(late, 1);
+    }
 }
 
 /*! 淡出走完。
@@ -392,6 +453,9 @@ bool ui_oobe_is_playing(void)
 
 void ui_oobe_play(void)
 {
+    if (!OOBE_ENABLE) {
+        return;
+    }
     if (lv_display_get_default() == NULL) {
         return;
     }
@@ -417,6 +481,11 @@ void ui_oobe_play(void)
     /* ---- OOBE 自己的一屏：黑底、吃掉触摸，播完整屏扔掉 ---- */
     s_prev_screen = lv_screen_active();
     s_screen = lv_obj_create(NULL);
+    if (s_screen == NULL) {
+        ESP_LOGE(TAG, "创建 OOBE 屏幕失败（内存不足？），跳过动画");
+        s_prev_screen = NULL;
+        return;
+    }
     lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_screen, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(s_screen, UI_COLOR_BG, 0);
