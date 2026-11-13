@@ -252,6 +252,22 @@ void app_navigator_init(void)
     }
 
     ui_common_init();
+
+    /* 先把整屏刷成纯黑，盖掉 LCD 上残留的上一轮画面。
+     *
+     * 软重启（RST / panic / OTA）时 LCD 的 GRAM 不会自动清空，LVGL 首次
+     * 渲染之前屏幕上一直是上次停机时的内容 —— 上一轮多半停在时钟页，
+     * 于是开机看起来「闪了一下时钟」。这里在持锁状态下强制刷一帧黑底，
+     * 之后建页、切开机动画全程都在锁内，中间不会再有任何渲染窗口。
+     * 首次冷启动时这一帧也只是把默认空屏刷黑，无副作用。 */
+    {
+        lv_obj_t *scr = lv_screen_active();
+        lv_obj_set_style_bg_color(scr, UI_COLOR_BG, 0);
+        lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+        lv_obj_invalidate(scr);
+        lv_refr_now(lv_display_get_default());
+    }
+
     switch_locked(PAGE_CLOCK, ANIM_NONE);
 
     /* 开机动画紧跟着切页启动，中间不留渲染窗口 —— 否则 LVGL 任务会先把
