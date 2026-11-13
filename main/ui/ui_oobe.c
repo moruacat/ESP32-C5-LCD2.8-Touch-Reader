@@ -55,16 +55,21 @@ extern const lv_font_t lv_font_montserrat_24;
 
 /*! 翻牌是否使用「横向压缩」（LVGL 的 transform 图层）。
  *
- *  实测数据：LVGL 9.5 在这套配置下（CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0，
- *  transform layer 的缓冲全部落在 PSRAM），每帧约 5.6KB 的图层缓冲不回收，
- *  一轮 2.65 秒 ≈ 986KB。重播四轮就把 3.8MB PSRAM 吃光，症状是
- *  「每次重播都更卡一点，第四次不动了 + task_wdt 报 CPU 0: lvgl」。
+ *  这里踩过 LVGL 9.5.0 的一个已知 Bug（ESPHome #19439，LVGL 9.6.0 的
+ *  PR #10448 修复）：lv_draw_layer() 在 scale_x <= 0 时直接 return，
+ *  跳过了 lv_draw_add_task()；而那次绘制用的图层已经在 lv_draw_layer_create()
+ *  时挂进 disp->layer_head 了，没有 task 就没有 lv_draw_destroy_task 来摘除它，
+ *  于是整条链（连同 lv_obj_redraw 塞进去的子任务、以及缓冲）**每帧泄漏一份**。
  *
- *  置 0 改用「方块淡出 → 字母淡入」的交叉淡化：全程不创建图层，零泄漏，
- *  代价是少了横向压缩那一层立体感（节奏、错峰、字距收紧都保留）。
- *  想换回真翻牌就把这里改回 1 —— 但请把「关于」页的重播按钮当成消耗品，
- *  播两三轮就得重启。 */
-#define OOBE_USE_FLIP     0
+ *  规避办法不是放弃翻牌，而是把缩放下限抬到 OOBE_SCALE_MIN：
+ *  LVGL 的 scale 单位是 1/256，取 1 就是 0.4% 宽度，肉眼上等于「压扁成一条线」，
+ *  但 1 > 0 不会命中那个提前返回，图层就能照常回收。
+ *
+ *  置 0 则退回纯「方块淡出 → 字母淡入」的交叉淡化（完全不用图层）。 */
+#define OOBE_USE_FLIP     1
+
+/*! 缩放下限，见上面的说明。不要改成 0 —— 那会重新踩进泄漏。 */
+#define OOBE_SCALE_MIN    1
 
 /*! 字符数（编译期从字符串长度得出，不含结尾 0） */
 #define OOBE_N            ((int)(sizeof(OOBE_TEXT) - 1))
@@ -191,22 +196,30 @@ static void exec_rise(void *var, int32_t v)
     lv_obj_set_style_opa(o, oobe_opa(v), 0);
 }
 
-/*! 方块翻走：绕左边缘 scale_x 1→0，透明度同步归零（侧对观众时正好消失） */
+/*! 方块翻走：绕左边缘 scale_x 100%→0.4%，透明度同步归零（侧对观众时正好消失）。
+ *  注意终点是 OOBE_SCALE_MIN 而不是 0，原因见文件顶部那条 LVGL Bug 说明。 */
 static void exec_block_flip(void *var, int32_t v)
 {
     lv_obj_t *o = (lv_obj_t *)var;
 #if OOBE_USE_FLIP
-    lv_obj_set_style_transform_scale_x(o, (LV_SCALE_NONE * (1000 - v)) / 1000, 0);
+    lv_obj_set_style_transform_scale_x(
+        o, OOBE_SCALE_MIN + ((LV_SCALE_NONE - OOBE_SCALE_MIN) * (1000 - v)) / 1000, 0);
 #endif
     lv_obj_set_style_opa(o, oobe_opa(1000 - v), 0);
 }
 
-/*! 字母翻入：同一时刻 scale_x 0→1，透明度从 0 拉满 */
+/*! 字母翻入：0.4%→100%，透明度从 0 拉满 */
 static void exec_text_flip(void *var, int32_t v)
 {
     lv_obj_t *o = (lv_obj_t *)var;
 #if OOBE_USE_FLIP
-    lv_obj_set_style_transform_scale_x(o, (LV_SCALE_NONE * v) / 1000, 0);
+    if (v == 0) {
+        /* 轮到它之前一直是 HIDDEN 的，省掉每帧为不可见对象建图层；
+         * 动画第一帧（v==0）才放出来，此时 scale 已经是 OOBE_SCALE_MIN */
+        lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_set_style_transform_scale_x(
+        o, OOBE_SCALE_MIN + ((LV_SCALE_NONE - OOBE_SCALE_MIN) * v) / 1000, 0);
 #endif
     lv_obj_set_style_opa(o, oobe_opa(v), 0);
 }
@@ -578,8 +591,13 @@ void ui_oobe_play(void)
         lv_obj_set_pos(text, x_start, text_y);
         lv_obj_set_style_opa(text, LV_OPA_TRANSP, 0);
 #if OOBE_USE_FLIP
-        lv_obj_set_style_transform_scale_x(text, 0, 0);         /* 字母一开始侧对屏幕 */
+        /* 侧对屏幕。这里必须是 OOBE_SCALE_MIN 而不是 0，否则每帧都会
+         * 命中 lv_draw_layer() 的提前返回、漏掉一个图层（见文件顶部说明） */
+        lv_obj_set_style_transform_scale_x(text, OOBE_SCALE_MIN, 0);
         oobe_flip_pivot(text);
+        /* 轮到它翻入之前一直藏着：不可见却带 transform 的对象，每帧都会
+         * 被判成 TRANSFORM 图层去走一遍渲染流程，纯浪费 */
+        lv_obj_add_flag(text, LV_OBJ_FLAG_HIDDEN);
 #endif
 
         s_items[i].block   = block;
