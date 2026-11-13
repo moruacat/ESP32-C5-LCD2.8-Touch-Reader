@@ -60,6 +60,7 @@ static const app_page_ops_t s_page_ops[PAGE_MAX] = {
     [PAGE_SET_BRIGHT] = {.build = ui_set_bright_create},
     [PAGE_SET_ABOUT] = {.build = ui_set_about_create},
     [PAGE_SET_BATTERY] = {.build = ui_set_battery_create},
+    [PAGE_SET_ENV]   = {.build = ui_set_env_create},
     [PAGE_SET_PHOTO] = {.build = ui_set_photo_create},
     [PAGE_FILES]     = {.build = ui_files_create},
     [PAGE_CALENDAR]  = {.build = ui_calendar_create},

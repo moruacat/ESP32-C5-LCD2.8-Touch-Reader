@@ -17,6 +17,7 @@
 #include "srv_wifi.h"
 #include "srv_ntp.h"
 #include "srv_ota.h"
+#include "srv_hist.h"
 #include "srv_audio.h"
 #include "srv_alarm.h"
 #include "srv_timer.h"
@@ -128,6 +129,10 @@ void app_init_all(void)
 
     /* 5.1 电池监测（CH32 ADC） */
     srv_battery_init();
+
+    /* 5.1.1 运行时采样：60 秒记一次电池/温湿度，供电池页和环境页画曲线。
+     *       只存内存（90 点 ≈ 1.5 小时），不读也不写历史 CSV。 */
+    srv_hist_init();
 
     /* 5.2 音频（I2S + ES8311，音量取自配置） */
     srv_audio_init();

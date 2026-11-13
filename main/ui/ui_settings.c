@@ -40,6 +40,7 @@ static const set_item_t s_items[] = {
     /* 照片相关设置（照片密码）收在「照片」二级页里 */
     {"照片", &ic_image,     SET_DETAIL, NULL, PAGE_SET_PHOTO, true},
     {"电池", &ic_charging,  SET_DETAIL, NULL, PAGE_SET_BATTERY, false},
+    {"环境", &ic_calibration, SET_DETAIL, NULL, PAGE_SET_ENV, false},
     {"亮度", &ic_brightness, SET_DETAIL, NULL, PAGE_SET_BRIGHT, false},
     {"关于", &ic_info,      SET_DETAIL, NULL, PAGE_SET_ABOUT, false},
 };

@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_log.h"
+
+static const char *TAG = "ui_dialog";
+
 /* 滚轮最多列数：日期需要 年/月/日/时/分 五列，留一列余量 */
 #define PICKER_MAX_COLS  6
 /*! 选项字符串缓冲：亮度 1~100 这一类单列 100 项也放得下。 */
@@ -169,19 +173,33 @@ static void add_btn_pair(lv_obj_t *box, lv_coord_t panel_w,
             right_text, right_cb, right_arg);
 }
 
-/* 危险动作按钮：红色实心 + 白字。取消按钮仍沿用原来的主色样式。 */
-static lv_obj_t *add_btn_danger(lv_obj_t *box, lv_align_t align,
-                                lv_coord_t x_ofs, lv_coord_t y_ofs,
-                                lv_coord_t w, const char *text,
-                                lv_event_cb_t cb, void *arg)
+/* 按面板左上角绝对定位的按钮（不走 align）。
+ *
+ * 确认框里的「确定/取消」原来用 LV_ALIGN_BOTTOM_LEFT/RIGHT，那依赖父面板的
+ * **实际高度**；一旦面板高度没生效（底部对齐算成负坐标），按钮就被推到可见区
+ * 之外，而标题用 TOP 对齐所以照常显示 —— 现象就是「只有按钮不见了」。
+ * 这里直接用已知的面板高度算 y，不再依赖对齐计算。
+ */
+static lv_obj_t *add_btn_pos(lv_obj_t *box, lv_coord_t x, lv_coord_t y,
+                             lv_coord_t w, bool primary, const char *text,
+                             lv_event_cb_t cb, void *arg)
 {
-    lv_obj_t *btn = add_btn(box, align, x_ofs, y_ofs, w, false, text, cb, arg);
-    lv_obj_set_style_bg_color(btn, UI_COLOR_TEMP, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_t *lb = lv_obj_get_child(btn, 0);
-    if (lb != NULL) {
-        lv_obj_set_style_text_color(lb, lv_color_white(), 0);
-    }
+    lv_obj_t *btn = lv_button_create(box);
+    lv_obj_set_size(btn, w, 36);
+    lv_obj_set_pos(btn, x, y);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    lv_obj_set_style_bg_color(btn, primary ? UI_COLOR_PRIMARY : UI_COLOR_BG, 0);
+    ui_add_click_feedback(btn);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, arg);
+
+    lv_obj_t *lb = lv_label_create(btn);
+    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_color(lb, primary ? lv_color_white() : UI_COLOR_TEXT, 0);
+    lv_label_set_text(lb, text ? text : "");
+    lv_obj_center(lb);
+
     return btn;
 }
 
@@ -222,15 +240,31 @@ void ui_dialog_confirm(const char *title, const char *note, const char *ok_text,
     add_text(box, title, UI_COLOR_TEMP, 18, 1);
     add_text(box, note, UI_COLOR_TEXT_DIM, 46, 2);
 
-    /* 取消仍在右侧、保持原来的主色；真正执行动作的按钮改成红色警示。 */
+    /* 取消仍在右侧、保持原来的主色；真正执行动作的按钮改成红色警示。
+     * 两个按钮都用绝对坐标（面板高 134 已知），不再依赖底部对齐 —— 见 add_btn_pos 的说明。 */
     lv_coord_t w = (lv_obj_get_width(box) - 36) / 2;
     if (w > 96) {
         w = 96;
     }
-    add_btn_danger(box, LV_ALIGN_BOTTOM_LEFT, 12, -12, w,
-                   ok_text ? ok_text : "确定", confirm_ok_cb, mask);
-    add_btn(box, LV_ALIGN_BOTTOM_RIGHT, -12, -12, w, true,
-            "取消", close_cb, mask);
+    const lv_coord_t btn_y = 134 - 36 - 12;
+
+    lv_obj_t *ok = add_btn_pos(box, 12, btn_y, w, false,
+                               ok_text ? ok_text : "确定", confirm_ok_cb, mask);
+    lv_obj_set_style_bg_color(ok, UI_COLOR_TEMP, 0);
+    lv_obj_set_style_bg_opa(ok, LV_OPA_COVER, 0);
+    lv_obj_t *ok_lb = lv_obj_get_child(ok, 0);
+    if (ok_lb != NULL) {
+        lv_obj_set_style_text_color(ok_lb, lv_color_white(), 0);
+    }
+
+    add_btn_pos(box, (lv_obj_get_width(box) - 12 - w), btn_y, w, true,
+                "取消", close_cb, mask);
+
+    /* 按钮「看不见」的排查点：box 高度异常（比如 0）就会让底部对齐把按钮推出屏幕。
+     * 改成绝对定位后按钮不再依赖这个值，但日志留着便于确认根因。 */
+    ESP_LOGI(TAG, "confirm: box=%dx%d btn_w=%d children=%u",
+             (int)lv_obj_get_width(box), (int)lv_obj_get_height(box), (int)w,
+             (unsigned)lv_obj_get_child_count(box));
 }
 
 /* ===================== 提示层 ===================== */
@@ -1470,10 +1504,17 @@ void ui_cover_show(uint8_t *data, size_t bytes, int32_t w, int32_t h)
     /* 点任意位置关闭（图片不可点击，点击都落在遮罩上） */
     lv_obj_add_event_cb(mask, close_cb, LV_EVENT_CLICKED, mask);
 
-    /* 转 90° 之后，图像的视觉宽 = 原图高、视觉高 = 原图宽，缩放要按这个算。
-     * 封面通常比屏幕小，所以允许放大到铺满（全屏看图，不做「小图不放大」）。 */
-    uint32_t sx = (uint32_t)(((int64_t)ui_scr_w() * 256) / h);
-    uint32_t sy = (uint32_t)(((int64_t)ui_scr_h() * 256) / w);
+    /* 封面方向要和物理屏一致：
+     *   - 屏幕 270°（竖屏）时，图像逆时针转 90°(2700) 才正立，视觉宽高互换；
+     *   - 屏幕 0°（横屏）时既不转、也不互换。
+     * 之前不分方向固定转 2700、且按 h/w 算缩放，横屏下封面就跟着屏幕一起转了。 */
+    const bool upright = (lv_display_get_rotation(lv_display_get_default())
+                          == LV_DISPLAY_ROTATION_0);
+    const int32_t vis_w = upright ? w : h;
+    const int32_t vis_h = upright ? h : w;
+
+    uint32_t sx = (uint32_t)(((int64_t)ui_scr_w() * 256) / vis_w);
+    uint32_t sy = (uint32_t)(((int64_t)ui_scr_h() * 256) / vis_h);
     uint32_t scale = (sx < sy) ? sx : sy;
     if (scale == 0) {
         scale = 1;
@@ -1496,6 +1537,6 @@ void ui_cover_show(uint8_t *data, size_t bytes, int32_t w, int32_t h)
     lv_obj_set_size(img, (lv_coord_t)((int64_t)w * scale / 256),
                          (lv_coord_t)((int64_t)h * scale / 256));
     lv_image_set_scale(img, scale);
-    lv_image_set_rotation(img, COVER_ROTATION);
+    lv_image_set_rotation(img, upright ? 0 : COVER_ROTATION);
     lv_obj_center(img);
 }

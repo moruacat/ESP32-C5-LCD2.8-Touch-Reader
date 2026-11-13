@@ -23,6 +23,7 @@ typedef enum {
     PAGE_SET_BRIGHT,    /*!< 设置->亮度 */
     PAGE_SET_ABOUT,     /*!< 设置->关于 */
     PAGE_SET_BATTERY,   /*!< 设置->电池 */
+    PAGE_SET_ENV,       /*!< 设置->环境（温湿度曲线） */
     PAGE_SET_PHOTO,     /*!< 设置->照片（照片密码） */
     PAGE_FILES,         /*!< 文件管理（浏览 SD 卡） */
     PAGE_CALENDAR,      /*!< 日历（时钟页上滑） */

@@ -19,7 +19,9 @@ static const char *TAG = "srv_ota";
 #define OTA_HTTP_PORT   8080
 #define OTA_RECV_BUF    4096
 #define OTA_MONITOR_MS  2000
-#define OTA_TASK_STACK  6144
+/* 监控任务只是每 2 秒查一次 WiFi 状态，2KB 栈绰绰有余；
+ * 任务栈占的是内部 RAM，省下来留给小智 AI。 */
+#define OTA_TASK_STACK  2048
 
 static httpd_handle_t s_server = NULL;
 static bool           s_mdns_up = false;
@@ -188,9 +190,10 @@ static esp_err_t serving_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port    = OTA_HTTP_PORT;
     cfg.max_open_sockets = 2;
-    /* esp_ota_write + flash 擦写在 httpd 任务栈里跑，默认 4KB 太紧；
-     * 8KB 够用，这里再留一半余量，避免栈溢出直接 panic 重启。 */
-    cfg.stack_size     = 12288;
+    /* esp_ota_write + flash 擦写在 httpd 任务栈里跑。8KB 够用：
+     * 之前设 12KB 是为「保险」，但这几个任务栈都在**内部 RAM**，
+     * 而小智 AI 启动时就是因为内部 RAM 吃紧（最低只剩 3KB）建不出任务。 */
+    cfg.stack_size     = 8192;
     /* 擦除大块时客户端会被 TCP 窗口堵住，给接收多留点余量 */
     cfg.recv_wait_timeout = 10;
     cfg.lru_purge_enable = true;
