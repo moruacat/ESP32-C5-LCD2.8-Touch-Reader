@@ -1503,14 +1503,20 @@ void ui_cover_show(uint8_t *data, size_t bytes, int32_t w, int32_t h)
     /* 点任意位置关闭（图片不可点击，点击都落在遮罩上） */
     lv_obj_add_event_cb(mask, close_cb, LV_EVENT_CLICKED, mask);
 
-    /* 封面方向要和物理屏一致：
-     *   - 屏幕 270°（竖屏）时，图像逆时针转 90°(2700) 才正立，视觉宽高互换；
-     *   - 屏幕 0°（横屏）时既不转、也不互换。
-     * 之前不分方向固定转 2700、且按 h/w 算缩放，横屏下封面就跟着屏幕一起转了。 */
-    const bool upright = (lv_display_get_rotation(lv_display_get_default())
-                          == LV_DISPLAY_ROTATION_0);
-    const int32_t vis_w = upright ? w : h;
-    const int32_t vis_h = upright ? h : w;
+    /* 「长边对应」：让封面长边贴着屏幕长边，等比缩放到完整显示（不裁剪），
+     * 这样可视面积最大。判据是「封面朝向」和「屏幕朝向」是否一致：
+     *   一致   → 逻辑坐标里不转（屏幕旋转已经把它摆正）
+     *   不一致 → 逻辑坐标里转 90°(2700)，屏幕旋转会再把它摆回来
+     *
+     * 之前按 display rotation 判断（横屏不转/竖屏转），等于假设封面永远是
+     * 横版：竖版封面在横屏下不转就只能缩到屏幕高度以内，两边空一大截；
+     * 而且缩放按 h/w 互换算，和实际视觉尺寸对不上就会裁边。 */
+    const bool scr_landscape = (ui_scr_w() > ui_scr_h());
+    const bool img_landscape = (w > h);
+    const bool need_rot = (scr_landscape != img_landscape);
+
+    const int32_t vis_w = need_rot ? h : w;   /* 旋转后的视觉宽 */
+    const int32_t vis_h = need_rot ? w : h;   /* 旋转后的视觉高 */
 
     uint32_t sx = (uint32_t)(((int64_t)ui_scr_w() * 256) / vis_w);
     uint32_t sy = (uint32_t)(((int64_t)ui_scr_h() * 256) / vis_h);
@@ -1536,6 +1542,6 @@ void ui_cover_show(uint8_t *data, size_t bytes, int32_t w, int32_t h)
     lv_obj_set_size(img, (lv_coord_t)((int64_t)w * scale / 256),
                          (lv_coord_t)((int64_t)h * scale / 256));
     lv_image_set_scale(img, scale);
-    lv_image_set_rotation(img, upright ? 0 : COVER_ROTATION);
+    lv_image_set_rotation(img, need_rot ? COVER_ROTATION : 0);
     lv_obj_center(img);
 }
