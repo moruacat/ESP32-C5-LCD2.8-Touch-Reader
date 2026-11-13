@@ -60,6 +60,11 @@ extern const lv_font_t lv_font_montserrat_24;
  *  改这一个数字重编译，其余代码不用动。 */
 #define OOBE_ENABLE       1
 
+/*! 播动画前至少要留这么多 PSRAM（KB）。低于这个值直接不播 ——
+ *  内存打穿时 LVGL 的分配会失败，症状是 LVGL 任务卡死 + 看门狗复位。
+ *  留得比较宽是因为动画期间的临时图层缓冲也要从这块池里拿。 */
+#define OOBE_MIN_PSRAM_KB 512
+
 _Static_assert(OOBE_N >= 4, "OOBE_TEXT 至少 4 个字符（收尾提前量取的是倒数第 3 个）");
 
 /* ============================================================================
@@ -98,6 +103,7 @@ static oobe_item_t s_items[OOBE_N];
 static oobe_timing_t s_tm[OOBE_N];
 static uint32_t    s_rest_at;        /*!< 字距收紧的起点 */
 static uint32_t    s_start_tick;     /*!< 开始时的时间戳，只用于统计实际耗时 */
+static int32_t     s_psram_at_start; /*!< 播放前的 PSRAM 余量，收尾时算净耗 */
 static bool        s_playing;
 
 /* ============================================================================
@@ -304,8 +310,12 @@ static uint32_t oobe_count_objs(const lv_obj_t *o)
  *
  * 顺序很重要：先把屏幕切回去，再删 OOBE 屏。否则当前活动屏被删掉时，
  * LVGL 会落到一个没有 screen 的状态，表现为整屏黑掉或者花屏。
+ *
+ * @param diag true  = 一段动画正常结束，打印体检数据并安排 3 秒后复查；
+ *             false = 重播前的清理，不打日志也不建复查定时器
+ *                     （否则每重播一次就多一个，还得自己收拾自己）
  */
-static void oobe_teardown(void)
+static void oobe_teardown(bool diag)
 {
     oobe_stop_anims();
 
@@ -338,15 +348,22 @@ static void oobe_teardown(void)
 
     memset(s_items, 0, sizeof(s_items));
 
-    /* 收尾体检：这三个数都该回到「动画开始前」的水平。
-     * 动画残留 / 定时器没删 / 堆被吃光，都会在这里露出来 ——
-     * 「整机一直卡」基本都出在这一步没做干净。 */
-    ESP_LOGI(TAG, "收尾：动画=%u 定时器=%u 活动屏对象=%u 内部RAM=%u PSRAM=%u",
+    if (!diag) {
+        return;
+    }
+
+    /* 收尾体检。「本轮净耗」只统计这一段动画从开始到刚播完的 PSRAM 净变化：
+     *   明显为正 → 这一屏没还回来（真泄漏）
+     *   接近 0   → 动画本身不吃常驻内存，PSRAM 的持续下降另有其人
+     *              （这块板上最可能是后台WiFi 扫描/重连） */
+    const int32_t psram_now = (int32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    ESP_LOGI(TAG, "收尾：动画=%u 定时器=%u 活动屏对象=%u 内部RAM=%u PSRAM=%u 本轮净耗=%dKB",
              (unsigned)lv_anim_count_running(),
              (unsigned)oobe_count_timers(),
              (unsigned)oobe_count_objs(lv_screen_active()),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+             (unsigned)psram_now,
+             (int)(((int32_t)s_psram_at_start - psram_now) / 1024));
 
     lv_timer_t *late = lv_timer_create(on_diag_late, 3000, NULL);
     if (late != NULL) {
@@ -361,7 +378,7 @@ static void on_fade_done(lv_anim_t *a)
 {
     (void)a;
     ESP_LOGI(TAG, "动画结束，实际 %ums", (unsigned)lv_tick_elaps(s_start_tick));
-    oobe_teardown();
+    oobe_teardown(true);
 }
 
 /*! 帧率探针：每被 LVGL 调度一次就 +1。
@@ -382,7 +399,7 @@ static void on_watchdog(lv_timer_t *t)
     lv_timer_delete(t);               /* 一次性定时器，自己删掉 */
     if (s_screen != NULL) {
         ESP_LOGW(TAG, "动画超时未收尾，强制清理");
-        oobe_teardown();
+        oobe_teardown(true);
     }
 }
 
@@ -460,12 +477,20 @@ void ui_oobe_play(void)
         return;
     }
 
-    oobe_teardown();                  /* 重播：先把上一轮（可能还在播）清干净 */
+    oobe_teardown(false);             /* 重播：先把上一轮（可能还在播）清干净 */
     memset(s_tm, 0, sizeof(s_tm));
 
     const lv_coord_t sw = ui_scr_w();
     const lv_coord_t sh = ui_scr_h();
     if (sw <= 0 || sh <= 0) {
+        return;
+    }
+
+    /* 内存兜底：这块屏在 PSRAM 紧张时硬上会把 LVGL 的分配打穿，
+     * 表现是 LVGL 任务卡死 + 看门狗报警。宁可这次不播。 */
+    s_psram_at_start = (int32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    if (s_psram_at_start < OOBE_MIN_PSRAM_KB * 1024) {
+        ESP_LOGW(TAG, "PSRAM 只剩 %dKB，跳过开机动画", (int)(s_psram_at_start / 1024));
         return;
     }
 
