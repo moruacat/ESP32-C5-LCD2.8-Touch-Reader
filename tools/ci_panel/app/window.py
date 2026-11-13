@@ -25,7 +25,8 @@ from .esptool_util import EsptoolTool, find_esptool
 from .github_api import WorkflowRun, average_duration_seconds
 from .settings import Prefs
 from .workers import (
-    ArtifactWorker, BaseWorker, FlashWorker, GitPushWorker, LogsWorker, RunsWorker,
+    ArtifactWorker, BaseWorker, FlashWorker, GitPushWorker, LogsWorker,
+    OtaPushWorker, OtaScanWorker, RunsWorker,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -400,6 +401,37 @@ class MainWindow(QMainWindow):
         flash_row.addWidget(self.flash_btn, 2)
         flash_row.addWidget(self.open_folder_btn, 1)
         box.addLayout(flash_row)
+
+        # ===== 局域网 OTA（方案见 docs/ota_eval.md）=====
+        box.addWidget(_divider())
+
+        ota_title = QLabel("局域网 OTA")
+        ota_title.setObjectName("cardTitle")
+        box.addWidget(ota_title)
+
+        self.ota_hint = _caption("点「刷新设备」扫描同一 WiFi 下的 ClockReader。", True)
+        box.addWidget(self.ota_hint)
+
+        ota_row = QHBoxLayout()
+        ota_row.setSpacing(7)
+        self.ota_combo = QComboBox()
+        self.ota_combo.setMinimumWidth(150)
+        self.ota_scan_btn = QPushButton("刷新设备")
+        self.ota_scan_btn.setProperty("variant", "ghost")
+        self.ota_scan_btn.setFixedWidth(72)
+        self.ota_scan_btn.setToolTip("用 mDNS 扫描 _clockreader-ota._tcp，要求设备与电脑在同一网段。")
+        self.ota_scan_btn.clicked.connect(self._on_ota_scan)
+        ota_row.addWidget(self.ota_combo, 1)
+        ota_row.addWidget(self.ota_scan_btn)
+        box.addLayout(ota_row)
+
+        self.ota_btn = QPushButton("OTA 推送固件")
+        self.ota_btn.setProperty("variant", "primary")
+        self.ota_btn.setToolTip(
+            "把已下载的固件推给选中的设备。\n"
+            "设备端 OTA 服务尚未实现时会在探测阶段报错（见 docs/ota_eval.md）。")
+        self.ota_btn.clicked.connect(self._on_ota_push)
+        box.addWidget(self.ota_btn)
         return card
 
     def _build_log_card(self) -> QFrame:
@@ -527,7 +559,7 @@ class MainWindow(QMainWindow):
             self.refresh_btn, self.actions_btn, self.push_btn, self.runs_table,
             self.open_run_btn, self.logs_btn, self.download_btn,
             self.port_combo, self.refresh_ports_btn, self.flash_btn,
-            self.open_folder_btn,
+            self.open_folder_btn, self.ota_combo, self.ota_scan_btn, self.ota_btn,
         ]
         for widget in widgets:
             widget.setEnabled(enabled)
@@ -552,6 +584,9 @@ class MainWindow(QMainWindow):
         self.download_btn.setEnabled(run is not None and run.conclusion == "success")
         self.flash_btn.setEnabled(self._last_download is not None)
         self.open_folder_btn.setEnabled(self._last_download is not None)
+        self.ota_scan_btn.setEnabled(True)
+        self.ota_btn.setEnabled(self._last_download is not None
+                                and self.ota_combo.count() > 0)
 
     # ================================================================
     # 后台任务
@@ -1143,6 +1178,77 @@ class MainWindow(QMainWindow):
             return
         self._set_status("烧录完成，设备已复位。", theme.OK)
         QMessageBox.information(self, "烧录完成", "固件烧录完成，设备已自动复位。")
+
+    # ================================================================
+    # 局域网 OTA（方案见 docs/ota_eval.md）
+    # ================================================================
+
+    def _on_ota_scan(self, _checked: bool = False) -> None:
+        self.ota_hint.setText("正在扫描局域网 ...")
+        self.ota_hint.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        self._start_task(OtaScanWorker(), self._on_ota_scan_done, "扫描 OTA 设备")
+
+    def _on_ota_scan_done(self, data: dict) -> None:
+        error = data.get("error")
+        if error:
+            self.ota_hint.setText(f"扫描失败：{error}")
+            self.ota_hint.setStyleSheet(f"color: {theme.ERR}; font-size: 11px;")
+            self._set_status(f"OTA 设备扫描失败：{error}", theme.ERR)
+            return
+
+        devices = data.get("devices") or []
+        self.ota_combo.clear()
+        for device in devices:
+            self.ota_combo.addItem(device.label(), device)
+
+        if not devices:
+            self.ota_hint.setText("没找到设备：确认设备已开机、连的是同一 WiFi，且固件里已启用 OTA。")
+            self.ota_hint.setStyleSheet(f"color: {theme.WARN}; font-size: 11px;")
+        else:
+            self.ota_hint.setText(f"找到 {len(devices)} 台设备。")
+            self.ota_hint.setStyleSheet(f"color: {theme.OK}; font-size: 11px;")
+        self._update_actions()
+
+    def _on_ota_push(self, _checked: bool = False) -> None:
+        device = self.ota_combo.currentData()
+        if device is None:
+            QMessageBox.information(self, "没有选择设备",
+                                    "先点「刷新设备」，扫描同一 WiFi 下的 ClockReader。")
+            return
+        if not self._last_download:
+            QMessageBox.information(self, "没有固件",
+                                    "先下载一次成功构建的 firmware，再来推送。")
+            return
+
+        app_bin = Path(str(self._last_download.get("app") or ""))
+        if not app_bin.is_file():
+            QMessageBox.warning(self, "固件文件不存在",
+                                f"找不到 {app_bin}，请重新下载 firmware。")
+            return
+
+        size_mb = app_bin.stat().st_size / 1048576
+        answer = QMessageBox.question(
+            self, "确认 OTA 推送",
+            f"把 {app_bin.name}（{size_mb:.2f} MB）推送到：\n{device.label()}\n\n"
+            "推送成功后设备会自动重启，期间不要断电。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+
+        worker = OtaPushWorker(device.host, device.port, app_bin,
+                               self.prefs.text("ota/token", ""))
+        self._append_log(f"OTA 推送 → {device.host}:{device.port}", "accent")
+        self._start_task(worker, self._on_ota_push_done, "正在推送固件 ...")
+
+    def _on_ota_push_done(self, data: dict) -> None:
+        error = data.get("error")
+        if error:
+            self._set_status(f"OTA 推送失败：{error}", theme.ERR)
+            QMessageBox.warning(self, "OTA 推送失败", error)
+            return
+        self.ota_hint.setText("推送完成，设备正在校验并重启 ...")
+        self.ota_hint.setStyleSheet(f"color: {theme.OK}; font-size: 11px;")
+        self._set_status("OTA 推送完成，设备重启后新固件生效。", theme.OK)
 
     # ================================================================
     # 窗口事件

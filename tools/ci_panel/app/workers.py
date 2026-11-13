@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """后台任务：查询构建、下载 artifact、下载日志、烧录。
 
 所有阻塞操作都放在 QThread 里执行；本文件只通过 Qt Signal 回主线程，
@@ -565,3 +565,110 @@ class FlashWorker(BaseWorker):
             self._fail(str(exc))
         except Exception as exc:
             self._fail(str(exc))
+
+
+# ======================================================================
+# OTA（局域网推送，方案见 docs/ota_eval.md）
+# ======================================================================
+
+class OtaScanWorker(BaseWorker):
+    """扫描局域网里开了 OTA 服务的 ClockReader。"""
+
+    def run(self) -> None:
+        from .discovery import scan        # zeroconf 延迟导入，没装也能跑别的功能
+        self.progress.emit(0, 0, "正在扫描局域网内的设备 ...")
+        devices, error = scan()
+        if error:
+            self._fail(error)
+            return
+        self.done.emit({"devices": devices, "error": None})
+
+
+class OtaPushWorker(BaseWorker):
+    """把本地固件推给设备：先 GET /api/info 探活，再 POST /ota 分块上传。
+
+    上传用 http.client 边读边发，不把整个 4 MB 固件读进内存。
+    设备端接口约定见 docs/ota_eval.md。
+    """
+
+    CHUNK = 64 * 1024
+
+    def __init__(self, host: str, port: int, firmware: Path, token: str = "") -> None:
+        super().__init__()
+        self.host = host
+        self.port = int(port)
+        self.firmware = Path(firmware)
+        self.token = token
+
+    def _probe(self) -> dict:
+        """GET /api/info：确认设备在线，顺便拿到版本/内存信息。"""
+        import http.client
+
+        conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
+        try:
+            conn.request("GET", "/api/info")
+            resp = conn.getresponse()
+            body = resp.read()
+            if resp.status != 200:
+                raise RuntimeError(f"设备返回 HTTP {resp.status}")
+            return json.loads(body.decode("utf-8", "replace") or "{}")
+        finally:
+            conn.close()
+
+    def run(self) -> None:
+        if not self.firmware.is_file():
+            self._fail(f"找不到固件：{self.firmware}")
+            return
+
+        size = self.firmware.stat().st_size
+        self.progress.emit(0, 0, "正在检查设备 ...")
+        try:
+            info = self._probe()
+        except Exception as exc:
+            self._fail(
+                f"连不上设备 {self.host}:{self.port}：{exc}\n"
+                "确认设备已开机、和电脑连的是同一 WiFi，并且固件里已经实现 OTA 服务"
+                "（当前固件尚未实现，见 docs/ota_eval.md）。")
+            return
+
+        self.log.emit(
+            f"设备在线：{info.get('version') or '未知版本'}，"
+            f"空闲内存 {info.get('free_heap', '?')} 字节", "info")
+
+        self._check_cancel()
+        self.progress.emit(0, size, f"正在上传 {size / 1048576:.2f} MB 固件 ...")
+
+        import http.client
+
+        conn = http.client.HTTPConnection(self.host, self.port, timeout=120)
+        sent = 0
+        try:
+            conn.putrequest("POST", "/ota")
+            conn.putheader("Content-Type", "application/octet-stream")
+            conn.putheader("Content-Length", str(size))
+            if self.token:
+                conn.putheader("X-OTA-Token", self.token)
+            conn.endheaders()
+
+            with open(self.firmware, "rb") as fh:
+                while True:
+                    self._check_cancel()
+                    chunk = fh.read(self.CHUNK)
+                    if not chunk:
+                        break
+                    conn.send(chunk)
+                    sent += len(chunk)
+                    self.progress.emit(sent, size, f"已发送 {sent * 100 // size}%")
+
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", "replace")
+            if resp.status not in (200, 204):
+                raise RuntimeError(f"设备返回 HTTP {resp.status}：{body[:200]}")
+            self.log.emit(f"设备已接收，正在校验并重启：{body[:120]}", "ok")
+            self.done.emit({"error": None, "bytes": sent, "info": info})
+        except WorkerCancelled as exc:
+            self._fail(str(exc))
+        except Exception as exc:
+            self._fail(f"OTA 推送失败：{exc}")
+        finally:
+            conn.close()
