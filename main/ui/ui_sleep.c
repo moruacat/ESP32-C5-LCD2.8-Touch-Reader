@@ -318,6 +318,14 @@ static void on_boot_key(srv_input_evt_t evt, void *arg)
 
 void ui_sleep_init(void)
 {
+    /* 这里直接改 LVGL 对象树，必须持锁：开机时 OOBE 动画已经在渲染，
+     * 不加锁会和 LVGL 任务撞车 —— 在「set_size(全屏) → set_bg_color(黑)
+     * → HIDDEN」这几行中间被渲染到，就是开机闪一个全屏灰框。 */
+    if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) != ESP_OK) {
+        ESP_LOGE(TAG, "取 LVGL 锁失败，休眠层未初始化");
+        return;
+    }
+
     /* 挂在 LVGL 顶层：不受页面切换影响，也盖得住所有控件 */
     s_layer = lv_obj_create(lv_layer_top());
     lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_SCROLLABLE);
@@ -332,16 +340,6 @@ void ui_sleep_init(void)
     lv_obj_add_event_cb(s_layer, on_layer_click, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(s_layer, LV_OBJ_FLAG_HIDDEN);
 
-    s_on = false;
-    s_dimmed = false;
-    s_locked = false;
-    s_force_touch_wake = false;
-    s_force_touch_wake_owner = NULL;
-    s_last_act_us = esp_timer_get_time();
-
-    /* BOOT 键统一在这里处理（srv_input 是单回调槽，闹钟那边不再抢） */
-    srv_input_register_cb(on_boot_key, NULL);
-
     /* 触摸即续期：按下和松手都记一次，短暂点击也不会漏掉 */
     lv_indev_t *indev = NULL;
     while ((indev = lv_indev_get_next(indev)) != NULL) {
@@ -351,6 +349,19 @@ void ui_sleep_init(void)
 
     /* 盯着「有没有操作」：闲置超过设定时间就按比例压低亮度 */
     lv_timer_create(dim_tick, DIM_TICK_MS, NULL);
+
+    bsp_display_unlock();
+
+    s_on = false;
+    s_dimmed = false;
+    s_locked = false;
+    s_force_touch_wake = false;
+    s_force_touch_wake_owner = NULL;
+    s_last_act_us = esp_timer_get_time();
+
+    /* BOOT 键统一在这里处理（srv_input 是单回调槽，闹钟那边不再抢）。
+     * 走的是服务层，不碰 LVGL，放锁外。 */
+    srv_input_register_cb(on_boot_key, NULL);
 
     ESP_LOGI(TAG, "休眠就绪：BOOT 键关屏/唤醒；自动变暗 %s（闲置 %d 秒）；自动锁屏 %s（闲置 %d 秒）",
              dim_enabled() ? "开" : "关",

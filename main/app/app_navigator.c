@@ -2,6 +2,7 @@
 #include "bsp/esp32_c5_touch_lcd_2.8.h"
 #include "srv_config.h"
 #include "ui_common.h"
+#include "ui_oobe.h"
 #include "ui_clock.h"
 #include "ui_home.h"
 #include "ui_func.h"
@@ -252,6 +253,11 @@ void app_navigator_init(void)
 
     ui_common_init();
     switch_locked(PAGE_CLOCK, ANIM_NONE);
+
+    /* 开机动画紧跟着切页启动，中间不留渲染窗口 —— 否则 LVGL 任务会先把
+     * 时钟页画出来闪一下，再被 OOBE 屏接管。
+     * 后面 ui_sleep_init 等初始化都已经改成持锁操作了，不会和渲染撞车。 */
+    ui_oobe_play();
 
     bsp_display_unlock();
 }
