@@ -27,6 +27,8 @@
 #include "ui_alarm_alert.h"
 #include "ui_ime.h"
 #include "ui_sleep.h"
+#include "ui_common.h"
+#include "ui_oobe.h"
 
 static const char *TAG = "app_init";
 
@@ -137,6 +139,22 @@ void app_init_all(void)
 
     /* 8.2 休眠：BOOT 键关屏/唤醒（响铃时该键优先停铃），点屏幕也能唤醒 */
     ui_sleep_init();
+
+    /* 8.3 开机动画（方块翻成 ClockReader 字标）
+     *
+     * 必须放在所有 UI 初始化之后。ui_sleep_init() 之类是直接改 LVGL 对象树但
+     * **不取锁**的，它们默认「这会儿屏幕上还静止、没人渲染」。动画一旦提前开跑，
+     * LVGL 任务每 15ms 刷一帧，就会在 ui_sleep_init() 的
+     * 「先 set_size(全屏) → 再 set_bg_color(黑) → 再 HIDDEN」这几行中间把它渲染出来，
+     * 开机闪一个全屏灰框；同时无锁改对象树也会把重绘区域搞乱，整机掉帧。
+     *
+     * 所以：等它们都建完、并静止下来，这里再持锁启动动画。 */
+    if (bsp_display_lock(UI_LOCK_TIMEOUT_MS) == ESP_OK) {
+        ui_oobe_play();
+        bsp_display_unlock();
+    } else {
+        ESP_LOGW(TAG, "取 LVGL 锁失败，跳过开机动画");
+    }
 
     /* 9. 按配置开启网络，并启动 NTP 自动校时流程
      *    注：调试用的串口命令行已经撤掉（功能改由 UI 提供），

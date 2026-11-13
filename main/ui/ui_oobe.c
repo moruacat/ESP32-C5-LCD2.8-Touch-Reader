@@ -26,15 +26,11 @@ static const char *TAG = "ui_oobe";
 #define OOBE_HOLD_MS      750
 /*! 字距收紧时长 */
 #define OOBE_REST_MS      700
-/*! 结尾整层淡出时长 */
+/*! 结尾整体淡出时长 */
 #define OOBE_FADE_MS      220
-/*! 整层入场时长（等效原版的容器缩放入场，见 ui_oobe_play 里的曲线注释） */
-#define OOBE_SETTLE_MS    600
 
 /*! 方块上浮距离：原版 50px 配 400px 高的窗口，这里 44px 配 240px */
 #define OOBE_RISE_PX      44
-/*! 整层入场时向上收的距离 */
-#define OOBE_SETTLE_PX    16
 
 /*! 方块边长 = 字格宽度。11 格 + 10 个间距要塞进 320：
  *  11*22 + 10*3 = 272，左右各留 24px。再大就顶边了。 */
@@ -74,7 +70,7 @@ typedef struct {
     lv_coord_t w_nat;    /*!< 字母自然宽度（收紧终点） */
 } oobe_item_t;
 
-/*! 单字的三个时间点 */
+/*! 单字的时间点 */
 typedef struct {
     uint32_t rise_at;    /*!< 开始上浮 */
     uint32_t rise_ms;    /*!< 上浮时长（对应原版的 timeMs） */
@@ -83,10 +79,17 @@ typedef struct {
     uint32_t text_at;    /*!< 字母开始翻入（−90°→0°）= flip_at + flip_ms */
 } oobe_timing_t;
 
-static lv_obj_t   *s_layer;              /*!< 全屏覆盖层，播完自己删 */
+/* 动画跑在**独立 screen** 上，而不是叠在当前页面之上的一个覆盖层。
+ * 叠加层看着省事，但 LVGL 不做遮挡剔除：每次局部重绘都要把
+ * 「screen 黑底 + 页面黑底 + 覆盖层黑底」画三遍，320x240 的屏直接掉帧；
+ * 独立 screen 的对象树里只有这 22 个元素，重绘成本只剩一份。 */
+static lv_obj_t   *s_screen;         /*!< OOBE 自己的那一屏 */
+static lv_obj_t   *s_prev_screen;    /*!< 播完要切回去的页面 */
+static lv_timer_t *s_watchdog;       /*!< 兜底：动画回调没跑到也要收尾 */
 static oobe_item_t s_items[OOBE_N];
 static oobe_timing_t s_tm[OOBE_N];
-static uint32_t    s_rest_at;            /*!< 字距收紧的起点 */
+static uint32_t    s_rest_at;        /*!< 字距收紧的起点 */
+static uint32_t    s_start_tick;     /*!< 开始时的时间戳，只用于统计实际耗时 */
 static bool        s_playing;
 
 /* ============================================================================
@@ -169,13 +172,7 @@ static void exec_rest(void *var, int32_t v)
     lv_obj_set_width(it->text, OOBE_CELL + ((it->w_nat - OOBE_CELL) * v) / 1000);
 }
 
-/*! 整层入场：整体向上收 */
-static void exec_settle(void *var, int32_t v)
-{
-    lv_obj_set_style_translate_y((lv_obj_t *)var, (lv_coord_t)((OOBE_SETTLE_PX * (1000 - v)) / 1000), 0);
-}
-
-/*! 整层淡出（连黑底一起，下面已经建好的页面就露出来了） */
+/*! 整屏淡出（连黑底一起），走完这一屏就该消失了 */
 static void exec_fade(void *var, int32_t v)
 {
     lv_obj_set_style_opa((lv_obj_t *)var, oobe_opa(1000 - v), 0);
@@ -234,34 +231,60 @@ static void oobe_stop_anims(void)
     lv_anim_delete(NULL, exec_block_flip);
     lv_anim_delete(NULL, exec_text_flip);
     lv_anim_delete(NULL, exec_rest);
-    lv_anim_delete(NULL, exec_settle);
     lv_anim_delete(NULL, exec_fade);
 }
 
-/*! 立刻清场（重播或页面销毁时用）。先删动画再删对象，避免回调里碰野指针 */
-static void oobe_destroy(void)
+/**
+ * @brief 收尾：清动画、清看门狗、切回原页面、删掉 OOBE 屏
+ *
+ * 顺序很重要：先把屏幕切回去，再删 OOBE 屏。否则当前活动屏被删掉时，
+ * LVGL 会落到一个没有 screen 的状态，表现为整屏黑掉或者花屏。
+ */
+static void oobe_teardown(void)
 {
     oobe_stop_anims();
 
-    if (s_layer != NULL && lv_obj_is_valid(s_layer)) {
-        lv_obj_delete(s_layer);
+    if (s_watchdog != NULL) {
+        lv_timer_delete(s_watchdog);
+        s_watchdog = NULL;
     }
-    s_layer = NULL;
-    s_playing = false;
+
+    lv_obj_t *scr  = s_screen;
+    lv_obj_t *prev = s_prev_screen;
+    s_screen      = NULL;
+    s_prev_screen = NULL;
+    s_playing     = false;
+
+    if (prev != NULL && lv_obj_is_valid(prev)) {
+        lv_screen_load(prev);
+    }
+    if (scr != NULL && lv_obj_is_valid(scr)) {
+        lv_obj_delete_async(scr);
+    }
+
     memset(s_items, 0, sizeof(s_items));
 }
 
-/*! 淡出走完：异步删掉覆盖层。
- *  不能在动画回调里同步删 —— 这一帧动画链表还在遍历，覆盖层上挂着的
- *  事件/定时器也未必都走完了。 */
+/*! 淡出走完。
+ *  不能在动画回调里同步删 —— 这一帧动画链表还在遍历，屏幕上挂着的
+ *  定时器/事件也未必都走完了。 */
 static void on_fade_done(lv_anim_t *a)
 {
     (void)a;
-    s_playing = false;
-    if (s_layer != NULL && lv_obj_is_valid(s_layer)) {
-        lv_obj_delete_async(s_layer);
+    ESP_LOGI(TAG, "动画结束，实际 %ums", (unsigned)lv_tick_elaps(s_start_tick));
+    oobe_teardown();
+}
+
+/*! 兜底：万一淡出动画因为卡顿丢了帧、或者别的原因没跑到 completed_cb，
+ *  到点也强制收尾，绝不让这一屏留在屏幕上拖累刷新率。 */
+static void on_watchdog(lv_timer_t *t)
+{
+    s_watchdog = NULL;
+    lv_timer_delete(t);               /* 一次性定时器，自己删掉 */
+    if (s_screen != NULL) {
+        ESP_LOGW(TAG, "动画超时未收尾，强制清理");
+        oobe_teardown();
     }
-    s_layer = NULL;
 }
 
 /*! 建一条动画（统一挂 cubic-bezier 曲线） */
@@ -269,7 +292,6 @@ typedef enum {
     OOBE_CURVE_IN = 0,   /*!< 原版方块翻走：(0.32, 0, 0.67, 0) */
     OOBE_CURVE_OUT,      /*!< 原版字母翻入：(0.33, 1, 0.68, 1) */
     OOBE_CURVE_IN_OUT,   /*!< 字距收紧：(0.65, 0, 0.35, 1) */
-    OOBE_CURVE_ENTRY,    /*!< 原版容器入场：(0, 0.83, 0.17, 0.9) */
 } oobe_curve_t;
 
 static void oobe_anim_start(void *var, lv_anim_exec_xcb_t cb,
@@ -295,9 +317,6 @@ static void oobe_anim_start(void *var, lv_anim_exec_xcb_t cb,
     case OOBE_CURVE_OUT:
         oobe_bezier(&a, 0.33f, 1.0f, 0.68f, 1.0f);
         break;
-    case OOBE_CURVE_ENTRY:
-        oobe_bezier(&a, 0.0f, 0.83f, 0.17f, 0.9f);
-        break;
     default:
         oobe_bezier(&a, 0.65f, 0.0f, 0.35f, 1.0f);
         break;
@@ -321,7 +340,8 @@ void ui_oobe_play(void)
         return;
     }
 
-    oobe_destroy();                   /* 重播：先把上一轮（可能还在播）清干净 */
+    oobe_teardown();                  /* 重播：先把上一轮（可能还在播）清干净 */
+    memset(s_tm, 0, sizeof(s_tm));
 
     const lv_coord_t sw = ui_scr_w();
     const lv_coord_t sh = ui_scr_h();
@@ -338,18 +358,16 @@ void ui_oobe_play(void)
 
     oobe_timing_build();
 
-    /* ---- 覆盖层：全屏黑底，吃掉触摸，播完自己消失 ---- */
-    s_layer = lv_obj_create(lv_screen_active());
-    lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_layer, LV_OBJ_FLAG_CLICKABLE);   /* 挡住下面页面的滑动手势 */
-    lv_obj_set_size(s_layer, sw, sh);
-    lv_obj_set_pos(s_layer, 0, 0);
-    lv_obj_set_style_bg_color(s_layer, UI_COLOR_BG, 0);
-    lv_obj_set_style_bg_opa(s_layer, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_layer, 0, 0);
-    lv_obj_set_style_radius(s_layer, 0, 0);
-    lv_obj_set_style_pad_all(s_layer, 0, 0);
-    lv_obj_set_style_translate_y(s_layer, OOBE_SETTLE_PX, 0);
+    /* ---- OOBE 自己的一屏：黑底、吃掉触摸，播完整屏扔掉 ---- */
+    s_prev_screen = lv_screen_active();
+    s_screen = lv_obj_create(NULL);
+    lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_screen, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(s_screen, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_screen, 0, 0);
+    lv_obj_set_style_radius(s_screen, 0, 0);
+    lv_obj_set_style_pad_all(s_screen, 0, 0);
 
     /* ---- 两套完全重合的格子：方块一套、字母一套 ---- */
     int32_t nat_total = 0;
@@ -357,7 +375,7 @@ void ui_oobe_play(void)
         const char ch[2] = { OOBE_TEXT[i], '\0' };
         const lv_coord_t x = grid_x + (lv_coord_t)(i * (OOBE_CELL + OOBE_GAP));
 
-        lv_obj_t *block = lv_obj_create(s_layer);
+        lv_obj_t *block = lv_obj_create(s_screen);
         lv_obj_remove_flag(block, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_size(block, OOBE_CELL, OOBE_CELL);
         lv_obj_set_pos(block, x, row_y);
@@ -370,7 +388,7 @@ void ui_oobe_play(void)
         lv_obj_set_style_translate_y(block, OOBE_RISE_PX, 0);
         oobe_flip_pivot(block);
 
-        lv_obj_t *text = lv_label_create(s_layer);
+        lv_obj_t *text = lv_label_create(s_screen);
         lv_label_set_text(text, ch);
         lv_obj_set_style_text_font(text, OOBE_FONT, 0);
         lv_obj_set_style_text_color(text, UI_COLOR_TEXT, 0);
@@ -396,17 +414,15 @@ void ui_oobe_play(void)
         xn += s_items[i].w_nat;
     }
 
-    /* ---- ① 整层入场 ----
-     * 原版是 Scale 1.25→1.0 + Opacity 0→1，曲线 cubic-bezier(0, 0.83, 0.17, 0.9)。
-     * 对整屏做 scale 在 LVGL 里要给 320x240 建一层变换画布（每帧全屏重采样），
-     * 单核 C5 上不划算，这里换成「整体向上收 16px」—— 这条曲线 17% 处就完成
-     * 90%，本来就是一条很急促的入场，位移和缩放的前半段观感几乎等价；而
-     * 「从无到有」由方块自己的淡入承担。 */
-    oobe_anim_start(s_layer, exec_settle, 0, OOBE_SETTLE_MS, OOBE_CURVE_ENTRY);
+    /* 切到 OOBE 这一屏。此刻 22 个元素都还是「方块 opa=0 / 字母 scale=0」，
+     * 所以观众看到的是纯黑，不会闪出半成品。 */
+    lv_screen_load(s_screen);
 
+    s_start_tick = lv_tick_get();
     s_playing = true;
 
-    /* ---- ②③④⑤ 每个字符 ----
+    /* ---- 每个字符：上浮 → 方块翻走 → 字母翻入 → 字距收紧 ----
+     *
      * 一次翻牌由两段首尾相接组成，不是同时：
      *
      *   方块 0→90°（ease-in）  ┃  字母 −90°→0°（ease-out）
@@ -419,28 +435,29 @@ void ui_oobe_play(void)
     for (int i = 0; i < OOBE_N; i++) {
         const oobe_timing_t *t = &s_tm[i];
 
-        /* ② 方块上浮 + 淡入 */
+        /* 方块上浮 + 淡入 */
         oobe_anim_start(s_items[i].block, exec_rise,
                         t->rise_at, t->rise_ms, OOBE_CURVE_OUT);
 
-        /* ③ 方块翻走（0→90°） */
+        /* 方块翻走（0→90°） */
         oobe_anim_start(s_items[i].block, exec_block_flip,
                         t->flip_at, t->flip_ms, OOBE_CURVE_IN);
 
-        /* ④ 字母翻入（−90°→0°），接在方块翻完之后 */
+        /* 字母翻入（−90°→0°），接在方块翻完之后 */
         oobe_anim_start(s_items[i].text, exec_text_flip,
                         t->text_at, t->flip_ms, OOBE_CURVE_OUT);
 
-        /* ⑤ 字距收紧 */
+        /* 字距收紧 */
         oobe_anim_start(&s_items[i], exec_rest,
                         s_rest_at, OOBE_REST_MS, OOBE_CURVE_IN_OUT);
     }
 
-    /* ---- ⑥ 整层淡出，露出下面已经建好的页面 ---- */
+    /* ---- 整屏淡出，走完就切回原页面 ---- */
+    const uint32_t total_ms = s_rest_at + OOBE_REST_MS + OOBE_FADE_MS;
     {
         lv_anim_t a;
         lv_anim_init(&a);
-        lv_anim_set_var(&a, s_layer);
+        lv_anim_set_var(&a, s_screen);
         lv_anim_set_exec_cb(&a, exec_fade);
         lv_anim_set_values(&a, 0, 1000);
         lv_anim_set_delay(&a, s_rest_at + OOBE_REST_MS);
@@ -450,8 +467,13 @@ void ui_oobe_play(void)
         lv_anim_start(&a);
     }
 
+    /* 兜底定时器：给整段留 1.5 秒余量。卡顿严重的机器上宁可硬收，也不留残影 */
+    s_watchdog = lv_timer_create(on_watchdog, total_ms + 1500, NULL);
+    if (s_watchdog != NULL) {
+        lv_timer_set_repeat_count(s_watchdog, 1);
+    }
+
     ESP_LOGI(TAG, "%d 格字标：总时长 %ums（收紧 %ums 起 %ums，淡出 %ums）",
-             OOBE_N,
-             (unsigned)(s_rest_at + OOBE_REST_MS + OOBE_FADE_MS),
+             OOBE_N, (unsigned)total_ms,
              (unsigned)s_rest_at, (unsigned)OOBE_REST_MS, (unsigned)OOBE_FADE_MS);
 }

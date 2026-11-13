@@ -2,7 +2,6 @@
 #include "bsp/esp32_c5_touch_lcd_2.8.h"
 #include "srv_config.h"
 #include "ui_common.h"
-#include "ui_oobe.h"
 #include "ui_clock.h"
 #include "ui_home.h"
 #include "ui_func.h"
@@ -253,10 +252,6 @@ void app_navigator_init(void)
 
     ui_common_init();
     switch_locked(PAGE_CLOCK, ANIM_NONE);
-
-    /* 开机动画：盖在已经建好的时钟页上播一遍「方块翻成 ClockReader」，
-     * 播完它自己淡出销毁，导航状态不受影响（所以这里不用改 s_current）。 */
-    ui_oobe_play();
 
     bsp_display_unlock();
 }
