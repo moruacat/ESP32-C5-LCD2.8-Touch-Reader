@@ -5,6 +5,7 @@
 #include "srv_sd.h"
 #include "srv_sensors.h"
 #include "srv_battery.h"
+#include "srv_wifi.h"
 #include "srv_timer.h"
 #include "srv_player.h"
 #include "srv_audio.h"
@@ -223,6 +224,83 @@ static void timer_line_refresh(void)
     lv_label_set_text(s_timer_label, buf);
 }
 
+/* ===================== 网络状态指示 ===================== */
+
+/*! 左上角 SD 图标右边的小信号柱：亮几格表示网络状态。
+ *
+ *  信息直接取自 srv_wifi 的三个状态位，不额外去查 RSSI —— 床头钟上只要
+ *  一眼看出「连上了 / 在连 / 没连」就够了，画真实信号强度反而要多一次
+ *  驱动查询，收益不成正比。
+ *
+ *  WiFi 整个关掉时这块整体隐藏，不在界面上留一个永远灰着的死图标。 */
+#define WIFI_BAR_N    3
+#define WIFI_BAR_W    4
+#define WIFI_BAR_GAP  3
+#define WIFI_BAR_H0   5      /*!< 第一格高度 */
+#define WIFI_BAR_DH   3      /*!< 每格递增高度 */
+
+static lv_obj_t *s_wifi_box;
+static lv_obj_t *s_wifi_bars[WIFI_BAR_N];
+
+static void wifi_indicator_refresh(void)
+{
+    if (s_wifi_box == NULL) {
+        return;
+    }
+
+    if (!srv_wifi_is_enabled()) {
+        lv_obj_add_flag(s_wifi_box, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_remove_flag(s_wifi_box, LV_OBJ_FLAG_HIDDEN);
+
+    int        lit;
+    lv_color_t color;
+    if (srv_wifi_is_connected()) {
+        lit   = 3;
+        color = UI_COLOR_OK;          /* 绿：已连上 */
+    } else if (srv_wifi_is_connecting()) {
+        lit   = 2;
+        color = UI_COLOR_WARN;        /* 黄：正在连 */
+    } else {
+        lit   = 1;
+        color = UI_COLOR_TEXT_DIM;    /* 灰：开着但没连 */
+    }
+
+    for (int i = 0; i < WIFI_BAR_N; i++) {
+        lv_obj_set_style_bg_color(s_wifi_bars[i], color, 0);
+        lv_obj_set_style_bg_opa(s_wifi_bars[i], (i < lit) ? LV_OPA_COVER : LV_OPA_30, 0);
+    }
+}
+
+static void wifi_indicator_create(lv_obj_t *parent)
+{
+    const lv_coord_t max_h = WIFI_BAR_H0 + (WIFI_BAR_N - 1) * WIFI_BAR_DH;
+
+    s_wifi_box = lv_obj_create(parent);
+    lv_obj_remove_flag(s_wifi_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(s_wifi_box, WIFI_BAR_N * WIFI_BAR_W + (WIFI_BAR_N - 1) * WIFI_BAR_GAP, max_h);
+    lv_obj_align(s_wifi_box, LV_ALIGN_TOP_LEFT, 34, 8);   /* SD 图标右边 */
+    lv_obj_set_style_bg_opa(s_wifi_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_wifi_box, 0, 0);
+    lv_obj_set_style_radius(s_wifi_box, 0, 0);
+    lv_obj_set_style_pad_all(s_wifi_box, 0, 0);
+    lv_obj_add_flag(s_wifi_box, LV_OBJ_FLAG_HIDDEN);      /* 等第一次刷新再决定 */
+
+    for (int i = 0; i < WIFI_BAR_N; i++) {
+        const lv_coord_t h = WIFI_BAR_H0 + i * WIFI_BAR_DH;
+        lv_obj_t *bar = lv_obj_create(s_wifi_box);
+        lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_size(bar, WIFI_BAR_W, h);
+        lv_obj_set_pos(bar, i * (WIFI_BAR_W + WIFI_BAR_GAP), max_h - h);   /* 底边对齐 */
+        lv_obj_set_style_border_width(bar, 0, 0);
+        lv_obj_set_style_radius(bar, 1, 0);
+        lv_obj_set_style_pad_all(bar, 0, 0);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_30, 0);
+        s_wifi_bars[i] = bar;
+    }
+}
+
 static void clock_refresh_timer(lv_timer_t *timer)
 {
     (void)timer;
@@ -247,6 +325,9 @@ static void clock_refresh_timer(lv_timer_t *timer)
 
     /* 状态栏：SD 卡有卡才显示图标 */
     ui_sd_icon_set(srv_sd_is_mounted());
+
+    /* 状态栏：WiFi 信号柱（关网时整块隐藏） */
+    wifi_indicator_refresh();
 
     /* 计时器 / 倒计时提示行 */
     timer_line_refresh();
@@ -312,6 +393,10 @@ static void clock_root_del_cb(lv_event_t *e)
     s_pctl_shown      = false;
     s_pctl_stopping   = false;
     s_pctl_pause_icon = false;
+
+    /* 网络指示器同样跟着页面一起销毁 */
+    s_wifi_box = NULL;
+    memset(s_wifi_bars, 0, sizeof(s_wifi_bars));
 }
 
 void ui_clock_create(lv_obj_t *root)
@@ -332,6 +417,9 @@ void ui_clock_create(lv_obj_t *root)
     /* ===== 状态栏 ===== */
     /* SD：有卡显示图标，没卡直接不显示 */
     ui_sd_icon_create(root, LV_ALIGN_TOP_LEFT, 10, 5);
+
+    /* WiFi：信号柱，紧挨 SD 图标右侧 */
+    wifi_indicator_create(root);
 
     /* 电池：代码绘制（外壳 + 正极 + 电量条 + 百分比） */
     ui_battery_create(root, LV_ALIGN_TOP_RIGHT, -10, 5);
