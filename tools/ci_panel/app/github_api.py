@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """GitHub Actions API 的只读封装。
 
 只依赖 Python 标准库，不把网络请求散落在窗口代码里。所有公开接口都
@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 API_ROOT = "https://api.github.com"
@@ -73,6 +73,30 @@ def _format_duration(start: str | None, end: str | None) -> str:
         return f"{minutes} 分 {seconds} 秒"
     hours, minutes = divmod(minutes, 60)
     return f"{hours} 小时 {minutes} 分"
+
+
+def average_duration_seconds(runs: list["WorkflowRun"], limit: int = 10) -> float | None:
+    """已完成运行的平均耗时（秒），用来估算进行中的构建什么时候结束。
+
+    只统计 status == completed 且首尾时间戳完整的运行，取最近 limit 条。
+    样本为空时返回 None，调用方据此决定不显示估算。
+    """
+    samples: list[float] = []
+    for run in runs:
+        if run.status != "completed":
+            continue
+        start = _parse_datetime(run.run_started_at or run.created_at)
+        end = _parse_datetime(run.updated_at)
+        if start is None or end is None:
+            continue
+        seconds = (end - start).total_seconds()
+        if seconds > 0:
+            samples.append(seconds)
+        if len(samples) >= limit:
+            break
+    if not samples:
+        return None
+    return sum(samples) / len(samples)
 
 
 @dataclass(slots=True)
@@ -162,6 +186,30 @@ class WorkflowRun:
     def duration_text(self) -> str:
         return _format_duration(self.run_started_at or self.created_at,
                                 self.updated_at)
+
+    def eta_text(self, avg_seconds: float | None) -> str:
+        """按历史平均耗时估算这次构建的完成时间。
+
+        已结束、或没有可用均值时返回空串（界面据此不显示这一段）。
+        """
+        if self.status == "completed" or not avg_seconds:
+            return ""
+        if not self.run_started_at:
+            # 还在排队（queued）：还没开始跑，按创建时间估会早早报「已完成」，不估
+            return ""
+        start = _parse_datetime(self.run_started_at)
+        if start is None:
+            return ""
+        now = datetime.now() if start.tzinfo is None else datetime.now(start.tzinfo)
+        remain = avg_seconds - (now - start).total_seconds()
+        if remain <= 0:
+            return "预计已完成，等待状态刷新"
+        finish = start + timedelta(seconds=avg_seconds)
+        try:
+            finish = finish.astimezone()
+        except ValueError:
+            pass
+        return f"预计 {finish.strftime('%H:%M')} 完成（剩 {max(1, int(remain // 60))} 分）"
 
     @property
     def event_text(self) -> str:

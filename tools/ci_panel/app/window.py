@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """CI 固件助手主窗口。"""
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from PySide6.QtSerialPort import QSerialPortInfo
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSystemTrayIcon,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import theme
 from .esptool_util import EsptoolTool, find_esptool
-from .github_api import WorkflowRun
+from .github_api import WorkflowRun, average_duration_seconds
 from .settings import Prefs
 from .workers import (
     ArtifactWorker, BaseWorker, FlashWorker, GitPushWorker, LogsWorker, RunsWorker,
@@ -122,6 +122,11 @@ class MainWindow(QMainWindow):
         self._esptool: EsptoolTool | None = None
         self._token_warning = ""
         self._dark_title_done = False
+        # 上一次刷新时每个 run 的状态：用来发现「刚跑完」的那一次
+        self._run_status_by_id: dict[int, str] = {}
+        # 已完成运行的平均耗时（秒），用来估算进行中构建的完成时间
+        self._avg_build_seconds: float | None = None
+        self._tray: QSystemTrayIcon | None = None
 
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(30_000)
@@ -134,6 +139,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_preferences()
+        self._setup_tray()
         self._refresh_ports()
         self._refresh_esptool_label()
         self._update_actions()
@@ -627,6 +633,61 @@ class MainWindow(QMainWindow):
             self._token_warning = warning
             self._append_log(warning, "warn")
 
+    def _setup_tray(self) -> None:
+        """常驻托盘图标，用来弹「构建完成」通知。
+
+        托盘不可用（被禁用 / 无桌面环境）时静默跳过，完成提醒退化成
+        状态栏 + 日志 + 提示音，功能不丢。
+        """
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self._tray = QSystemTrayIcon(theme.app_icon(64), self)
+        self._tray.setToolTip("CI 固件助手")
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _on_tray_activated(self, reason) -> None:
+        """点托盘图标把窗口拉回前台。"""
+        if reason == QSystemTrayIcon.Trigger:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+
+    def _check_finished(self, runs: list[WorkflowRun]) -> list[WorkflowRun]:
+        """对比上一轮状态，找出这一次刷新里刚结束的构建。
+
+        首次加载时所有旧状态都是 None，不会误报。
+        返回刚结束的运行列表，调用方据此决定状态栏要不要让位给完成提示。
+        """
+        finished = []
+        for run in runs:
+            old = self._run_status_by_id.get(run.id)
+            if old is not None and old != "completed" and run.status == "completed":
+                finished.append(run)
+        self._run_status_by_id = {run.id: run.status for run in runs}
+        if finished:
+            self._notify_finished(finished)
+        return finished
+
+    def _notify_finished(self, runs: list[WorkflowRun]) -> None:
+        """构建完成提醒：状态栏 + 日志 + 提示音 + 托盘气泡。"""
+        parts = [f"#{r.run_number} {r.status_text}" for r in runs[:3]]
+        if len(runs) > 3:
+            parts.append(f"等 {len(runs)} 个")
+        text = "、".join(parts)
+        ok = all(r.conclusion == "success" for r in runs)
+
+        self._append_log(f"构建完成：{text}", "ok" if ok else "error")
+        self._set_status(f"构建完成：{text}", theme.OK if ok else theme.ERR)
+        QApplication.beep()
+
+        if self._tray is not None:
+            self._tray.showMessage(
+                "CI 固件助手",
+                f"构建完成：{text}",
+                QSystemTrayIcon.Information if ok else QSystemTrayIcon.Warning,
+                8000)
+
     def _on_runs_done(self, data: dict) -> None:
         error = data.get("error")
         if error:
@@ -635,11 +696,15 @@ class MainWindow(QMainWindow):
         runs = data.get("runs") or []
         self._runs = runs
         self._runs_by_id = {run.id: run for run in runs}
+        self._avg_build_seconds = average_duration_seconds(runs)
+        finished = self._check_finished(runs)
         self.runs_badge.setText(f"{len(runs)} 条")
         self.refresh_time_label.setText("刷新于 " + QTime.currentTime().toString("HH:mm:ss"))
         previous = self._current_run.id if self._current_run else None
         self._populate_runs(runs, previous)
-        self._set_status(f"构建列表已刷新，共 {len(runs)} 条。", theme.OK)
+        if not finished:
+            # 刚有构建结束时状态栏已经是「构建完成：…」，别用刷新提示盖掉它
+            self._set_status(f"构建列表已刷新，共 {len(runs)} 条。", theme.OK)
 
     def _populate_runs(self, runs: list[WorkflowRun], preserve_id: int | None) -> None:
         self._updating_table = True
@@ -656,6 +721,7 @@ class MainWindow(QMainWindow):
                 title_item = self._item(
                     f"#{run.run_number}  {run.display_title}", theme.TEXT)
 
+                eta = run.eta_text(self._avg_build_seconds)
                 tooltip = (
                     f"#{run.run_number}  {run.display_title}\n"
                     f"运行 ID：{run.id}\n"
@@ -663,7 +729,8 @@ class MainWindow(QMainWindow):
                     f"提交：{run.head_sha or '—'}\n"
                     f"分支：{run.head_branch or '—'}\n"
                     f"状态：{run.status_text}    用时：{run.duration_text or '—'}\n"
-                    f"时间：{run.created_at}")
+                    + (f"{eta}\n" if eta else "")
+                    + f"时间：{run.created_at}")
                 for item in (status_item, sha_item, time_item, event_item, title_item):
                     item.setToolTip(tooltip)
 
@@ -733,6 +800,9 @@ class MainWindow(QMainWindow):
         self.detail_status.setText(f"● {run.status_text}")
         self.detail_status.setStyleSheet(f"color: {color}; font-weight: 600;")
         duration = f"\n用时 {run.duration_text}" if run.duration_text else ""
+        eta = run.eta_text(self._avg_build_seconds)
+        if eta:
+            duration += f"\n{eta}"
         self.detail_meta.setText(
             f"{run.name}\n{run.event_text} · {run.time_text}{duration}\n"
             f"分支 {run.head_branch or '—'}")
@@ -1112,5 +1182,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._auto_timer.stop()
+        if self._tray is not None:
+            self._tray.hide()
         self._save_preferences()
         event.accept()
