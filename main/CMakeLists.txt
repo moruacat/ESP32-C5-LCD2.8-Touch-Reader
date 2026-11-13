@@ -54,6 +54,7 @@ idf_component_register(
         "services/srv_config.c"
         "services/srv_wifi.c"
         "services/srv_ntp.c"
+        "services/srv_ota.c"
         "services/srv_audio.c"
         "services/srv_alarm.c"
         "services/srv_timer.c"
@@ -101,6 +102,11 @@ idf_component_register(
         esp_netif
         esp_event
         esp_http_client
+        # 局域网 OTA：HTTP 服务端接收固件、mDNS 让 CI 工具自动发现设备、
+        # app_update 提供 esp_ota_* 写入与切换启动分区。
+        esp_http_server
+        mdns
+        app_update
         lwip
         esp_codec_dev
         esp_audio_codec

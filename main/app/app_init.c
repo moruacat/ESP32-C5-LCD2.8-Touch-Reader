@@ -16,6 +16,7 @@
 #include "srv_input.h"
 #include "srv_wifi.h"
 #include "srv_ntp.h"
+#include "srv_ota.h"
 #include "srv_audio.h"
 #include "srv_alarm.h"
 #include "srv_timer.h"
@@ -27,6 +28,8 @@
 #include "ui_alarm_alert.h"
 #include "ui_ime.h"
 #include "ui_sleep.h"
+
+#include "esp_ota_ops.h"
 
 static const char *TAG = "app_init";
 
@@ -149,6 +152,11 @@ void app_init_all(void)
     srv_wifi_init();
     srv_ntp_init();
 
+    /* 5.8 局域网 OTA（见 docs/ota_eval.md）
+     *     只起一个 2 秒轮询的监控任务：WiFi 连上才启动 mDNS + HTTP 服务，
+     *     断开就停掉，不常驻占用射频和内存。 */
+    srv_ota_init();
+
     /* 6. 显示 + LVGL（内部创建 LVGL 任务） */
     if (bsp_display_start() == NULL) {
         ESP_LOGE(TAG, "display start failed");
@@ -178,6 +186,16 @@ void app_init_all(void)
         }
     } else {
         ESP_LOGI(TAG, "网络开关为关，跳过联网与 NTP");
+    }
+
+    /* 10. OTA 回滚保护
+     *     从 OTA 分区启动的新固件会带「待验证」标记，bootloader 下次重启时
+     *     如果它还没被标记有效，就会自动回滚到上一个分区。能走到这里说明
+     *     显示、存储、网络、UI 都已经初始化完成，可以认为这份固件能用了。 */
+    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+        const esp_partition_t *running = esp_ota_get_running_partition();
+        ESP_LOGI(TAG, "当前运行分区：%s（OTA 校验通过，已标记有效）",
+                 running ? running->label : "?");
     }
 
     ESP_LOGI(TAG, "system init done");

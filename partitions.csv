@@ -3,5 +3,9 @@ nvs,      data, nvs,     0x9000,   0x6000,
 otadata,  data, ota,     0xf000,   0x2000,
 phy_init, data, phy,     0x11000,  0x1000,
 factory,  app,  factory, 0x20000,  0x600000,
-fonts,    data, spiffs,  ,         0x400000,
-storage,  data, spiffs,  ,         0x500000,
+# 局域网 OTA 的目标分区（见 docs/ota_eval.md）：
+# 保留 factory 当串口烧录落点和回滚保底，OTA 在 factory <-> ota_0 之间轮换。
+# 注意：加这个分区会让 fonts/storage 后移，改分区表后必须完整重烧一次。
+ota_0,    app,  ota_0,   0x620000, 0x600000,
+fonts,    data, spiffs,  0xC20000, 0x400000,
+storage,  data, spiffs,  0x1020000,0x500000,
