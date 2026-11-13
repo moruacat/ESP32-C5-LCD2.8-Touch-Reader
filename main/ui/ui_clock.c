@@ -273,14 +273,20 @@ static void wifi_indicator_refresh(void)
     }
 }
 
-static void wifi_indicator_create(lv_obj_t *parent)
+static void wifi_indicator_create(lv_obj_t *parent, lv_obj_t *anchor)
 {
     const lv_coord_t max_h = WIFI_BAR_H0 + (WIFI_BAR_N - 1) * WIFI_BAR_DH;
 
     s_wifi_box = lv_obj_create(parent);
     lv_obj_remove_flag(s_wifi_box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(s_wifi_box, WIFI_BAR_N * WIFI_BAR_W + (WIFI_BAR_N - 1) * WIFI_BAR_GAP, max_h);
-    lv_obj_align(s_wifi_box, LV_ALIGN_TOP_LEFT, 34, 8);   /* SD 图标右边 */
+    if (anchor != NULL) {
+        /* 挂在 SD 图标右边，而不是硬编码坐标：ic_SD 是 32x32，凭估计写 x 很容易压上去，
+         * 而且以后换图标尺寸这里也不用跟着改。SD 图标隐藏时 coords 依然有效，对齐照常。 */
+        lv_obj_align_to(s_wifi_box, anchor, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+    } else {
+        lv_obj_align(s_wifi_box, LV_ALIGN_TOP_LEFT, 48, 15);
+    }
     lv_obj_set_style_bg_opa(s_wifi_box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_wifi_box, 0, 0);
     lv_obj_set_style_radius(s_wifi_box, 0, 0);
@@ -416,10 +422,10 @@ void ui_clock_create(lv_obj_t *root)
 
     /* ===== 状态栏 ===== */
     /* SD：有卡显示图标，没卡直接不显示 */
-    ui_sd_icon_create(root, LV_ALIGN_TOP_LEFT, 10, 5);
+    lv_obj_t *sd_img = ui_sd_icon_create(root, LV_ALIGN_TOP_LEFT, 10, 5);
 
-    /* WiFi：信号柱，紧挨 SD 图标右侧 */
-    wifi_indicator_create(root);
+    /* WiFi：信号柱，挂在 SD 图标右侧 */
+    wifi_indicator_create(root, sd_img);
 
     /* 电池：代码绘制（外壳 + 正极 + 电量条 + 百分比） */
     ui_battery_create(root, LV_ALIGN_TOP_RIGHT, -10, 5);
