@@ -2,7 +2,6 @@
 #include "ui_common.h"
 #include "ui_icons.h"
 #include "ui_dialog.h"
-#include "ui_oobe.h"
 #include "app_navigator.h"
 #include "srv_config.h"
 #include "srv_safe.h"
@@ -103,13 +102,6 @@ static void on_reset_click(lv_event_t *e)
                       "重置", on_reset_ok, NULL);
 }
 
-/* 重播开机动画：不用重启就能看一遍，调节奏时省事 */
-static void on_oobe_replay_click(lv_event_t *e)
-{
-    (void)e;
-    ui_oobe_play();
-}
-
 /* ---- 快速返回主页 / 安全模式（从设置主页挪过来） ---- */
 
 static void on_fast_home_switch(lv_event_t *e)
@@ -165,9 +157,6 @@ void ui_set_about_create(lv_obj_t *root)
 
     row = ui_row_create(list, UI_ROW_Y(next++), NULL, "重载 SD 卡");
     ui_row_btn_create(row, -8, 64, "重载", on_remount_click, NULL);
-
-    row = ui_row_create(list, UI_ROW_Y(next++), &ic_info, "开机动画");
-    ui_row_btn_create(row, -8, 64, "重播", on_oobe_replay_click, NULL);
 
     if (show_fast_home) {
         row = ui_row_create(list, UI_ROW_Y(next++), &ic_home, "快速返回主页");
