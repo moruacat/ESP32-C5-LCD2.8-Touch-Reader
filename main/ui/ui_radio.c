@@ -7,20 +7,21 @@
 
 #include <stdio.h>
 
-/* ===================== 布局（横屏 320x240） ===================== */
+/* ===================== 布局（跟随当前屏幕方向） ===================== */
 
 #define NAME_Y      38
 #define STATUS_Y    60
 
 #define BTN_Y       96
 #define BTN_H       48
-#define BTN_W       148
 #define BTN_GAP     8
 #define X0          8
+/*! 两个按钮等分一行：横屏 148，竖屏 108 */
+#define BTN_W       ((ui_scr_w() - X0 * 2 - BTN_GAP) / 2)
 
 #define VOL_Y       176
 #define VOL_SLIDER_X 44
-#define VOL_SLIDER_W 186
+#define VOL_SLIDER_W (ui_scr_w() - VOL_SLIDER_X - 70)
 
 #define TICK_MS     200
 
@@ -184,7 +185,7 @@ void ui_radio_create(lv_obj_t *root)
     s_status = lv_label_create(root);
     lv_obj_set_style_text_font(s_status, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_status, UI_COLOR_TEXT_DIM, 0);
-    lv_obj_set_width(s_status, UI_SCREEN_W - 16);
+    lv_obj_set_width(s_status, ui_scr_w() - 16);
     lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_status, srv_radio_status_text());
     lv_obj_set_pos(s_status, X0, STATUS_Y);

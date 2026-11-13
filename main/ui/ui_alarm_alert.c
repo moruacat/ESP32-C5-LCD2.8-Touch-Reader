@@ -58,7 +58,7 @@ static lv_obj_t *make_btn(lv_obj_t *parent, lv_coord_t x, const char *text,
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_set_size(btn, BTN_W, BTN_H);
-    lv_obj_set_pos(btn, x, UI_SCREEN_H - BTN_H - 14);
+    lv_obj_set_pos(btn, x, ui_scr_h() - BTN_H - 14);
     lv_obj_set_style_radius(btn, 10, 0);
     lv_obj_set_style_bg_color(btn, color, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
@@ -81,7 +81,7 @@ static void show_ring_layer(int index)
     s_layer = lv_obj_create(lv_layer_top());
     lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_layer, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(s_layer, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(s_layer, ui_scr_w(), ui_scr_h());
     lv_obj_set_pos(s_layer, 0, 0);
     lv_obj_set_style_bg_color(s_layer, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_layer, LV_OPA_COVER, 0);
@@ -115,7 +115,7 @@ static void show_ring_layer(int index)
 
     /* 两个按钮：左稍后，右停止 */
     const lv_coord_t gap = 16;
-    const lv_coord_t x0 = (UI_SCREEN_W - BTN_W * 2 - gap) / 2;
+    const lv_coord_t x0 = (ui_scr_w() - BTN_W * 2 - gap) / 2;
     make_btn(s_layer, x0, "稍后 5 分钟", UI_COLOR_SURFACE, on_snooze);
     make_btn(s_layer, x0 + BTN_W + gap, "停止", UI_COLOR_PRIMARY, on_stop);
 }

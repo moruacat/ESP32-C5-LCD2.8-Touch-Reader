@@ -12,7 +12,8 @@
 static const char *TAG = "ui_ai";
 
 #define TICK_MS     200
-#define BTN_W       200
+/*! 「按住说话」宽：横屏居中 200；竖屏收窄并靠左，给右侧音量键让位 */
+#define BTN_W       ((ui_scr_w() >= 300) ? 200 : (ui_scr_w() - 80))
 #define BTN_H       48
 
 static lv_obj_t *s_state_lb = NULL;     /*!< 状态文本（正在连接… / 按住说话…） */
@@ -166,7 +167,7 @@ void ui_ai_create(lv_obj_t *root)
     lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_align(s_hint_lb, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_hint_lb, "打开 xiaozhi.me 控制台\n添加设备并输入上面的激活码");
-    lv_obj_set_width(s_hint_lb, UI_SCREEN_W - 24);
+    lv_obj_set_width(s_hint_lb, ui_scr_w() - 24);
     lv_obj_align(s_hint_lb, LV_ALIGN_TOP_MID, 0, UI_TITLEBAR_H + 88);
     lv_obj_add_flag(s_hint_lb, LV_OBJ_FLAG_HIDDEN);
 
@@ -175,7 +176,7 @@ void ui_ai_create(lv_obj_t *root)
     lv_obj_set_style_text_font(s_state_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_state_lb, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_align(s_state_lb, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(s_state_lb, UI_SCREEN_W - 16);
+    lv_obj_set_width(s_state_lb, ui_scr_w() - 16);
     lv_obj_set_height(s_state_lb, font_ui_14.line_height);
     lv_label_set_long_mode(s_state_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_anim_duration(s_state_lb, 6000, 0);
@@ -187,7 +188,7 @@ void ui_ai_create(lv_obj_t *root)
     lv_obj_set_style_text_font(s_text_lb, &font_ui_14, 0);
     lv_obj_set_style_text_color(s_text_lb, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_align(s_text_lb, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(s_text_lb, UI_SCREEN_W - 24);
+    lv_obj_set_width(s_text_lb, ui_scr_w() - 24);
     lv_obj_set_height(s_text_lb, 72);
     lv_label_set_long_mode(s_text_lb, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_text_lb, "");
@@ -196,7 +197,12 @@ void ui_ai_create(lv_obj_t *root)
     /* 按住说话 */
     s_btn = lv_button_create(root);
     lv_obj_set_size(s_btn, BTN_W, BTN_H);
-    lv_obj_align(s_btn, LV_ALIGN_BOTTOM_MID, 0, -14);
+    if (ui_scr_w() >= 300) {
+        lv_obj_align(s_btn, LV_ALIGN_BOTTOM_MID, 0, -14);
+    } else {
+        /* 竖屏：靠左摆，右侧留给音量键 */
+        lv_obj_align(s_btn, LV_ALIGN_BOTTOM_LEFT, 8, -14);
+    }
     lv_obj_set_style_radius(s_btn, 10, 0);
     lv_obj_set_style_shadow_width(s_btn, 0, 0);
     lv_obj_set_style_pad_all(s_btn, 0, 0);
@@ -217,7 +223,7 @@ void ui_ai_create(lv_obj_t *root)
     /* 右侧音量键：和「按住说话」同一行，弹通用的音量条 */
     lv_obj_t *vol = lv_button_create(root);
     lv_obj_set_size(vol, 48, BTN_H);
-    lv_obj_set_pos(vol, UI_SCREEN_W - 8 - 48, UI_SCREEN_H - 14 - BTN_H);
+    lv_obj_set_pos(vol, ui_scr_w() - 8 - 48, ui_scr_h() - 14 - BTN_H);
     lv_obj_set_style_radius(vol, 10, 0);
     lv_obj_set_style_bg_color(vol, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_shadow_width(vol, 0, 0);

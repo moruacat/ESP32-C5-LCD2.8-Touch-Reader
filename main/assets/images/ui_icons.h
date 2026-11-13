@@ -50,6 +50,7 @@ LV_IMAGE_DECLARE(ic_prev);
 LV_IMAGE_DECLARE(ic_radio);
 LV_IMAGE_DECLARE(ic_record);
 LV_IMAGE_DECLARE(ic_reset);
+LV_IMAGE_DECLARE(ic_rotate);
 LV_IMAGE_DECLARE(ic_search);
 LV_IMAGE_DECLARE(ic_setting);
 LV_IMAGE_DECLARE(ic_sleep);

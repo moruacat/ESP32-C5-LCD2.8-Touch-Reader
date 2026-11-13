@@ -34,7 +34,8 @@ extern "C" {
 
 /* ===================== 设置列表行（各二级设置页共用） ===================== */
 #define UI_ROW_X     8
-#define UI_ROW_W     304
+/*! 行宽跟随当前逻辑屏宽：竖屏 240 下不能再用横屏的 304 */
+#define UI_ROW_W     (ui_scr_w() - UI_ROW_X * 2)
 #define UI_ROW_H     40      /*!< 行高必须放得下 32x32 图标 */
 #define UI_ROW_GAP   4
 #define UI_ROW_TOP   4       /*!< 列表顶部留白 */

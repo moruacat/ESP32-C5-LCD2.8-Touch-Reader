@@ -7,18 +7,22 @@
 
 #include <stdio.h>
 
-/* 底部两个按钮：左「重置」，右「开始/暂停/继续」 */
-#define BTN_Y           180
+/* 底部两个按钮：左「重置」，右「开始/暂停/继续」。
+ * 位置跟随当前屏幕：竖屏 240 时主按钮收窄，底部贴着屏幕下沿。 */
+#define BTN_Y           (ui_scr_h() - 60)
 #define BTN_H           48
 #define BTN_RESET_X     8
 #define BTN_RESET_W     96
 #define BTN_MAIN_X      112
-#define BTN_MAIN_W      200
+#define BTN_MAIN_W      (ui_scr_w() - BTN_MAIN_X - 8)
 
-/* 标题栏右侧的 BOOT 启停开关（风格同单词页的查词/译按钮） */
+/* 标题栏右侧的 BOOT 启停开关（风格同单词页的查词/译按钮）。
+ * 横屏放标题栏、旋转键左边；竖屏标题栏太窄，挪到左下（底部按钮上方），
+ * 免得压住居中的「计时器」标题。 */
 #define BOOT_TAB_W      92
 #define BOOT_TAB_H      20
-#define BOOT_TAB_X      (UI_SCREEN_W - BOOT_TAB_W - 8)
+#define BOOT_TAB_X      ((ui_scr_w() >= 300) ? (ui_scr_w() - BOOT_TAB_W - 40) : 8)
+#define BOOT_TAB_Y      ((ui_scr_w() >= 300) ? 4 : (ui_scr_h() - BTN_H - 40))
 
 /*! 刷新周期：百分秒显示，50ms 一跳（20Hz）。
  *  .hh 那两位本来就是每 10ms 才变一次，20Hz 时每次跳 5 个数，看着一样是连续跑动；
@@ -141,7 +145,7 @@ static lv_obj_t *make_boot_tab(lv_obj_t *root)
 {
     lv_obj_t *btn = lv_button_create(root);
     lv_obj_set_size(btn, BOOT_TAB_W, BOOT_TAB_H);
-    lv_obj_set_pos(btn, BOOT_TAB_X, 4);
+    lv_obj_set_pos(btn, BOOT_TAB_X, BOOT_TAB_Y);
     lv_obj_set_style_radius(btn, 6, 0);
     lv_obj_set_style_bg_color(btn, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);

@@ -284,12 +284,6 @@ static void add_card(lv_obj_t *list, const srv_book_t *bk, int idx)
 
 /* ===================== 页面 ===================== */
 
-static void on_rotate_clicked(lv_event_t *e)
-{
-    (void)e;
-    app_navigator_toggle_page_rotation();
-}
-
 /* 列表内容（空态或卡片）。抽出来是为了移出书架后能整块重建 */
 static char s_filter[SRV_BOOK_NAME_MAX];
 
@@ -403,8 +397,8 @@ void ui_bookshelf_create(lv_obj_t *root)
     s_card_w = (sw - MARGIN * 2 - (s_cols - 1) * CARD_GAP) / s_cols;
 
     lv_obj_t *bar = ui_titlebar_create_plain(root, "书架", app_navigator_back_smart_cb, NULL);
-    ui_titlebar_button_create(bar, "旋转", -8, 44, on_rotate_clicked, NULL);
-    ui_titlebar_button_create(bar, "搜索", -56, 44, on_search_clicked, NULL);
+    /* 旋转键由标题栏统一放在最右端，搜索键放在它左边 */
+    ui_titlebar_button_create(bar, "搜索", -32, 40, on_search_clicked, NULL);
 
     /* 每次进书架都重扫：最近阅读排序开关可能刚改过 */
     (void)srv_library_scan();

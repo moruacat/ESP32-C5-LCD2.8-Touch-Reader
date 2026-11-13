@@ -101,9 +101,9 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_READ_AUTO_SEC,    read_auto_sec,   15,     5, 600),
     /* 书架按最近阅读排序：越后读的越靠前 */
     I32(CFG_SHELF_RECENT,    shelf_recent,      CFG_DEF_SHELF_RECENT, 0, 1),
-    /* 书架/阅读器共用方向；运行时只接受 0/270，持久化后下次进页直接按它构屏 */
-    I32(CFG_ROT_BOOKSHELF,   rot_bookshelf,     CFG_DEF_ROT,          0, 270),
-    I32(CFG_ROT_WORDS,       rot_words,         CFG_DEF_ROT,          0, 270),
+    /* 全局页面方向：所有页面共用（时钟、日历、游戏锁定横屏，见 app_navigator）。
+     * 运行时只接受 0/270，持久化后下次进页直接按它构屏。 */
+    I32(CFG_ROT,             rot,               CFG_DEF_ROT,          0, 270),
 
     /* 传感器 */
     I32(CFG_TEMP_REC_EN,     temp_rec_en,      1,      0, 1),
@@ -116,7 +116,6 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_TIMER_SOUND,     timer_sound,      1,      0, 1),
 
     /* 音乐 */
-    I32(CFG_ROT_MUSIC,       rot_music,         CFG_DEF_ROT,          0, 270),
     IDX("mute1_en",          mute_en,   0,     0,      0, 1),
     IDX("mute1_s",           mute_s,    0,     480,    0, 1439),
     IDX("mute1_e",           mute_e,    0,     600,    0, 1439),
@@ -159,6 +158,19 @@ static const cfg_field_t *find_field(const char *key)
         }
     }
     return NULL;
+}
+
+/* 旧版本按页面分别存方向（rot_bookshelf / rot_words / rot_music）。
+ * 现在合并成全局 rot：读到旧键就映射过去，老卡上的 config.dat 不用手工改，
+ * 三个旧键谁排在后面谁生效（同一个值，取到哪个都不影响使用）。 */
+static const char *legacy_key_alias(const char *key)
+{
+    if (strcmp(key, "rot_bookshelf") == 0 ||
+        strcmp(key, "rot_words") == 0 ||
+        strcmp(key, "rot_music") == 0) {
+        return CFG_ROT;
+    }
+    return key;
 }
 
 /* 去掉首尾空白，返回新的起始指针 */
@@ -204,9 +216,10 @@ static bool apply_line(char *line)
     }
     *eq = '\0';
 
-    const cfg_field_t *f = find_field(trim(p));
+    const char *key = trim(p);
+    const cfg_field_t *f = find_field(legacy_key_alias(key));
     if (f == NULL) {
-        ESP_LOGD(TAG, "忽略未知配置项: %s", p);
+        ESP_LOGD(TAG, "忽略未知配置项: %s", key);
         return false;
     }
 

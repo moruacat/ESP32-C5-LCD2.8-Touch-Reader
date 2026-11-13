@@ -37,10 +37,10 @@
 #define SENT_LEN     120         /*!< 直译模式输入上限（键盘最多 128） */
 #define SUGGEST_MAX  3           /*!< 拼写容错最多列几条 */
 
-/* 标题栏右侧两个模式按钮 */
+/* 标题栏右侧两个模式按钮；最右端留给标题栏自带的旋转键 */
 #define TAB_W        44
 #define TAB_H        20
-#define TAB_TRANS_X  (ui_scr_w() - TAB_W - 8)
+#define TAB_TRANS_X  (ui_scr_w() - TAB_W - 32)
 #define TAB_WORD_X   (TAB_TRANS_X - TAB_W - 4)
 
 /* ===================== 页面状态 ===================== */
@@ -854,12 +854,6 @@ static void on_entry_clicked(lv_event_t *e)
     app_navigator_switch(page, true);
 }
 
-static void on_rotate_clicked(lv_event_t *e)
-{
-    (void)e;
-    app_navigator_toggle_page_rotation();
-}
-
 void ui_words_create(lv_obj_t *root)
 {
     s_mode = 0;
@@ -868,9 +862,8 @@ void ui_words_create(lv_obj_t *root)
     s_lemma_txt[0] = '\0';
     s_detail_from_trans = false;
 
-    /* 标题栏不要右侧时钟（右边留给两个模式按钮），旋转键放返回键右侧。 */
-    lv_obj_t *bar = ui_titlebar_create_plain(root, "单词", app_navigator_back_cb, NULL);
-    ui_titlebar_left_button_create(bar, "旋转", 32, 44, on_rotate_clicked, NULL);
+    /* 标题栏不要右侧时钟（右边留给两个模式按钮），旋转键由标题栏统一放在最右端。 */
+    ui_titlebar_create_plain(root, "单词", app_navigator_back_cb, NULL);
     s_tab_word  = make_tab(root, TAB_WORD_X,  "查词", on_tab_word);
     s_tab_trans = make_tab(root, TAB_TRANS_X, "译",   on_tab_trans);
 

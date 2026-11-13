@@ -1150,12 +1150,6 @@ static void on_root_del(lv_event_t *e)
 
 /* ===================== 页面 ===================== */
 
-static void on_rotate_clicked(lv_event_t *e)
-{
-    (void)e;
-    app_navigator_toggle_page_rotation();
-}
-
 void ui_music_create(lv_obj_t *root)
 {
     s_root = root;
@@ -1166,9 +1160,8 @@ void ui_music_create(lv_obj_t *root)
     s_last_idx = -2;
     s_last_name[0] = '\0';
 
-    /* 保留右侧时钟；旋转键放在时钟左边，竖屏下也放得下。 */
-    lv_obj_t *bar = ui_titlebar_create(root, "音乐", app_navigator_back_smart_cb, NULL);
-    ui_titlebar_button_create(bar, "旋转", -52, 44, on_rotate_clicked, NULL);
+    /* 保留右侧时钟；旋转键由标题栏统一放在最右端，时钟会自动左移让位。 */
+    ui_titlebar_create(root, "音乐", app_navigator_back_smart_cb, NULL);
 
     /* 时段静音：只在「本来没在放音乐」时判定。后台已经在放（进页只是看看列表/
      * 换歌），一进门把音量压到 0 会突然没声，不符合手机的使用习惯。 */

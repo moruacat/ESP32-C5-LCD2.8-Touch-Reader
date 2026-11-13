@@ -190,7 +190,7 @@ void ui_set_battery_create(lv_obj_t *root)
 
     /* ---- 电量条 ---- */
     s_bar = lv_bar_create(root);
-    lv_obj_set_size(s_bar, 304, 10);
+    lv_obj_set_size(s_bar, UI_ROW_W, 10);
     lv_obj_set_pos(s_bar, 8, 96);
     lv_bar_set_range(s_bar, 0, 100);
     lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);

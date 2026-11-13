@@ -23,11 +23,11 @@
 #define CALC_MARGIN     8
 #define CALC_DISP_Y     30
 #define CALC_DISP_H     58
-#define CALC_KEY_Y      90      /*!< 5 行键 + 4 道缝正好落在 240 内 */
-#define CALC_KEY_H      27
+#define CALC_KEY_Y      90      /*!< 5 行键 + 4 道缝：横屏落在 240 内，竖屏自动变高 */
 #define CALC_KEY_GAP    3
 #define CALC_COLS       4
-#define CALC_KEY_W      ((UI_SCREEN_W - CALC_MARGIN * 2 - CALC_KEY_GAP * (CALC_COLS - 1)) / CALC_COLS)
+#define CALC_KEY_W      ((ui_scr_w() - CALC_MARGIN * 2 - CALC_KEY_GAP * (CALC_COLS - 1)) / CALC_COLS)
+#define CALC_KEY_H      (((ui_scr_h() - CALC_KEY_Y - CALC_MARGIN) - CALC_KEY_GAP * 4) / 5)
 
 /*! 输入串上限：10 位数字 + 可能的负号，48px 字体刚好在显示区放得下 */
 #define CALC_ENTRY_MAX  11
@@ -455,7 +455,7 @@ void ui_calculator_create(lv_obj_t *root)
     /* ===== 显示区 ===== */
     lv_obj_t *disp = lv_obj_create(root);
     lv_obj_remove_flag(disp, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(disp, UI_SCREEN_W - CALC_MARGIN * 2, CALC_DISP_H);
+    lv_obj_set_size(disp, ui_scr_w() - CALC_MARGIN * 2, CALC_DISP_H);
     lv_obj_set_pos(disp, CALC_MARGIN, CALC_DISP_Y);
     lv_obj_set_style_bg_color(disp, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_bg_opa(disp, LV_OPA_COVER, 0);
@@ -467,7 +467,7 @@ void ui_calculator_create(lv_obj_t *root)
     lv_obj_set_style_text_color(s_num_lb, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(s_num_lb, &font_clock_48, 0);
     /* 右对齐：位数变多时向左生长，右边固定留 8px */
-    lv_obj_set_width(s_num_lb, UI_SCREEN_W - CALC_MARGIN * 2 - 16);
+    lv_obj_set_width(s_num_lb, ui_scr_w() - CALC_MARGIN * 2 - 16);
     lv_obj_set_style_text_align(s_num_lb, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_long_mode(s_num_lb, LV_LABEL_LONG_CLIP);
     lv_obj_align(s_num_lb, LV_ALIGN_RIGHT_MID, -8, 0);

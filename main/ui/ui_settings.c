@@ -172,7 +172,7 @@ static void build_row(lv_obj_t *parent, int idx, lv_coord_t y)
     lv_obj_t *state = lv_label_create(row);
     lv_obj_set_style_text_color(state, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(state, &font_ui_14, 0);
-    lv_obj_set_width(state, 90);
+    lv_obj_set_width(state, lv_pct(30));   /* 竖屏行窄，按比例给右侧状态让位 */
     lv_label_set_long_mode(state, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(state, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(state, LV_ALIGN_RIGHT_MID, -12, 0);

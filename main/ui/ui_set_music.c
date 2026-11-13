@@ -85,6 +85,10 @@ static void on_sw_click(lv_event_t *e)
 
 /* ===================== 页面 ===================== */
 
+/* 「静音时段」按钮：竖屏行窄，收窄并往右挪，别压到名称 */
+#define SPAN_W      ((ui_scr_w() >= 300) ? 106 : 76)
+#define SPAN_OFS    ((ui_scr_w() >= 300) ? -62 : -56)
+
 void ui_set_music_create(lv_obj_t *root)
 {
     ui_titlebar_create(root, "音乐", app_navigator_back_cb, NULL);
@@ -92,7 +96,7 @@ void ui_set_music_create(lv_obj_t *root)
 
     for (int i = 0; i < MUTE_NUM; i++) {
         lv_obj_t *row = ui_row_create(list, UI_ROW_Y(i), &ic_music, NAME[i]);
-        s_span_lb[i] = ui_row_btn_create(row, -62, 106, "--:--",
+        s_span_lb[i] = ui_row_btn_create(row, SPAN_OFS, SPAN_W, "--:--",
                                          on_span_click, (void *)(intptr_t)i);
         s_sw_lb[i] = ui_row_switch_create(row, false, on_sw_click, (void *)(intptr_t)i);
     }

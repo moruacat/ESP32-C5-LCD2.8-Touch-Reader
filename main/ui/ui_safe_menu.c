@@ -16,8 +16,8 @@
 #include "ui_icons.h"
 #include "app_navigator.h"
 
-#define CARD_W      148
-#define CARD_H      168
+#define CARD_W      ((ui_scr_w() - 16 - GAP) / 2)    /* 横屏 148，竖屏 108 */
+#define CARD_H      ((ui_scr_h() >= 300) ? 216 : 168)
 #define CARD_Y      34
 #define GAP         8
 

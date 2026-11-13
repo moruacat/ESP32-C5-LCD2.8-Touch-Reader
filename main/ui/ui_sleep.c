@@ -256,6 +256,9 @@ void ui_sleep_set(bool on)
     s_last_act_us = esp_timer_get_time();
 
     if (on) {
+        /* 屏幕方向可能和初始化时不同（旋转后在别的页面里休眠），
+         * 休眠层要正好盖住当前逻辑屏幕 */
+        lv_obj_set_size(s_layer, ui_scr_w(), ui_scr_h());
         lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_layer, LV_OBJ_FLAG_HIDDEN);

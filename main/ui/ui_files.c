@@ -36,16 +36,19 @@ static const char *TAG = "ui_files";
 /* 列表最多记多少条：屏上只看得见 4 行，多出来的靠滚动；上限只是防内存爆 */
 #define FILE_LIST_MAX   64
 
-#define ROW_W           304
+/* 行宽/底栏宽度跟随当前屏幕：竖屏 240 下不能再用横屏的 304 */
+#define ROW_X           8
+#define ROW_W           (ui_scr_w() - ROW_X * 2)
 #define ROW_H           32
 #define ROW_GAP         4
 
 #define PATH_Y          30
 #define PATH_H          32
 #define LIST_Y          64
-#define LIST_H          140
-#define SD_BAR_Y        208
-#define SD_TEXT_Y       218
+/*! 列表高度 = 屏幕高度扣掉路径栏和底部 SD 占用条 */
+#define LIST_H          (ui_scr_h() - LIST_Y - 36)
+#define SD_BAR_Y        (ui_scr_h() - 32)
+#define SD_TEXT_Y       (ui_scr_h() - 22)
 
 typedef struct {
     char     name[SRV_FS_NAME_MAX];
@@ -630,8 +633,8 @@ void ui_files_create(lv_obj_t *root)
     /* ---- 路径栏：当前路径 + 「上级」「重载」 ---- */
     lv_obj_t *bar = lv_obj_create(root);
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(bar, 304, PATH_H);
-    lv_obj_set_pos(bar, 8, PATH_Y);
+    lv_obj_set_size(bar, ROW_W, PATH_H);
+    lv_obj_set_pos(bar, ROW_X, PATH_Y);
     lv_obj_set_style_bg_color(bar, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
@@ -641,7 +644,8 @@ void ui_files_create(lv_obj_t *root)
     s_path_lb = lv_label_create(bar);
     lv_obj_set_style_text_color(s_path_lb, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(s_path_lb, &font_ui_14, 0);
-    lv_obj_set_width(s_path_lb, 150);
+    /* 路径标签给右侧两个按钮让位（竖屏时路径会被省略号收短） */
+    lv_obj_set_width(s_path_lb, ROW_W - 140);
     lv_label_set_long_mode(s_path_lb, LV_LABEL_LONG_DOT);
     lv_obj_align(s_path_lb, LV_ALIGN_LEFT_MID, 8, 0);
 
@@ -652,7 +656,7 @@ void ui_files_create(lv_obj_t *root)
     /* ---- 文件列表（纵向滚动；横向滑动仍交给页面手势返回） ---- */
     s_list = lv_obj_create(root);
     lv_obj_remove_flag(s_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
-    lv_obj_set_size(s_list, UI_SCREEN_W, LIST_H);
+    lv_obj_set_size(s_list, ui_scr_w(), LIST_H);
     lv_obj_set_pos(s_list, 0, LIST_Y);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
@@ -668,8 +672,8 @@ void ui_files_create(lv_obj_t *root)
 
     /* ---- 底部：SD 卡占用 ---- */
     s_sd_bar = lv_bar_create(root);
-    lv_obj_set_size(s_sd_bar, 304, 8);
-    lv_obj_set_pos(s_sd_bar, 8, SD_BAR_Y);
+    lv_obj_set_size(s_sd_bar, ROW_W, 8);
+    lv_obj_set_pos(s_sd_bar, ROW_X, SD_BAR_Y);
     lv_bar_set_range(s_sd_bar, 0, 100);
     lv_bar_set_value(s_sd_bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_sd_bar, UI_COLOR_SURFACE, LV_PART_MAIN);
@@ -680,10 +684,10 @@ void ui_files_create(lv_obj_t *root)
     s_sd_lb = lv_label_create(root);
     lv_obj_set_style_text_color(s_sd_lb, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(s_sd_lb, &font_ui_14, 0);
-    lv_obj_set_width(s_sd_lb, 304);
+    lv_obj_set_width(s_sd_lb, ROW_W);
     lv_label_set_long_mode(s_sd_lb, LV_LABEL_LONG_DOT);
     lv_label_set_text(s_sd_lb, "");
-    lv_obj_set_pos(s_sd_lb, 8, SD_TEXT_Y);
+    lv_obj_set_pos(s_sd_lb, ROW_X, SD_TEXT_Y);
 
     /* ---- 每次进来都从挂载点根开始 ---- */
     snprintf(s_cur, sizeof(s_cur), "%s", srv_sd_mount_point());

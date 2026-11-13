@@ -393,7 +393,8 @@ void ui_ime_text_input_show(const char *title, uint32_t max_len,
     s_ime_arg  = arg;
     lv_obj_add_event_cb(mask, ime_del_cb, LV_EVENT_DELETE, NULL);
 
-    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, -6);
+    /* 贴底：和英文键盘同一套位置，底边与屏幕底边齐平 */
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_pinyin_ime_set_mode(kb, LV_PINYIN_IME_MODE_K26);
     lv_pinyin_ime_set_lang(kb, LV_PINYIN_IME_LANG_CN);
     lv_pinyin_ime_attach(kb, ta);

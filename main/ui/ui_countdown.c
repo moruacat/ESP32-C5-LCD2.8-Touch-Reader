@@ -15,23 +15,30 @@ static const char *TAG = "ui_countdown";
 
 /* ===================== 布局 ===================== */
 #define SETUP_Y         30
-#define ROLLER_W        70
+/*! 滚轮宽度跟着屏幕：横屏 70，竖屏 240 时收窄到 66，三个滚轮不越界 */
+#define ROLLER_W        ((ui_scr_w() >= 300) ? 70 : ((ui_scr_w() - 16 - ROLLER_GAP * 2) / 3))
 #define ROLLER_GAP      12
 #define ROLLER_TOP      6
 #define ROLLER_LINE_SP  8       /*!< 滚轮行距：14px 字体太密看不清，拉开一点 */
 
-#define BTN_Y           180
+/* 底部三个按钮：宽度和位置按屏幕算，竖屏时整体收窄、贴底 */
+#define BTN_Y           (ui_scr_h() - 60)
 #define BTN_H           48
-#define BTN_RESET_X     14
-#define BTN_RESET_W     72
-#define BTN_MAIN_X      94
-#define BTN_MAIN_W      108
-#define BTN_SOUND_X     210
-#define BTN_SOUND_W     96
+#define BTN_X0          14
+#define BTN_GAP         8
+#define BTN_RESET_W     ((ui_scr_w() >= 300) ? 72 : 56)
+#define BTN_SOUND_W     ((ui_scr_w() >= 300) ? 96 : 64)
+#define BTN_RESET_X     BTN_X0
+#define BTN_MAIN_X      (BTN_RESET_X + BTN_RESET_W + BTN_GAP)
+#define BTN_MAIN_W      (ui_scr_w() - BTN_X0 * 2 - BTN_RESET_W - BTN_SOUND_W - BTN_GAP * 2)
+#define BTN_SOUND_X     (BTN_MAIN_X + BTN_MAIN_W + BTN_GAP)
 
+/* 标题栏右端最外层是旋转键（8 + 24）。横屏把 BOOT 启停放它左边；
+ * 竖屏标题栏太窄，挪到左下（底部按钮上方），免得压住标题和滚轮。 */
 #define BOOT_TAB_W      92
 #define BOOT_TAB_H      20
-#define BOOT_TAB_X      (UI_SCREEN_W - BOOT_TAB_W - 8)
+#define BOOT_TAB_X      ((ui_scr_w() >= 300) ? (ui_scr_w() - BOOT_TAB_W - 40) : 8)
+#define BOOT_TAB_Y      ((ui_scr_w() >= 300) ? 4 : (ui_scr_h() - BTN_H - 40))
 
 #define TICK_MS         100
 #define ALERT_CLOSE_MS  8000    /*!< 到点提示层自动消失时间 */
@@ -264,7 +271,7 @@ static lv_obj_t *make_boot_tab(lv_obj_t *root)
 {
     lv_obj_t *btn = lv_button_create(root);
     lv_obj_set_size(btn, BOOT_TAB_W, BOOT_TAB_H);
-    lv_obj_set_pos(btn, BOOT_TAB_X, 4);
+    lv_obj_set_pos(btn, BOOT_TAB_X, BOOT_TAB_Y);
     lv_obj_set_style_radius(btn, 6, 0);
     lv_obj_set_style_bg_color(btn, UI_COLOR_SURFACE, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
@@ -336,7 +343,7 @@ void ui_countdown_create(lv_obj_t *root)
     /* ===== 设定形态：三列滚轮 ===== */
     s_setup_box = lv_obj_create(root);
     lv_obj_remove_flag(s_setup_box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_setup_box, UI_SCREEN_W, SETUP_Y + 120);
+    lv_obj_set_size(s_setup_box, ui_scr_w(), SETUP_Y + 120);
     lv_obj_set_pos(s_setup_box, 0, SETUP_Y);
     lv_obj_set_style_bg_opa(s_setup_box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_setup_box, 0, 0);
@@ -349,7 +356,7 @@ void ui_countdown_create(lv_obj_t *root)
     int     m0 = (int)((total_s / 60) % 60);
     int     s0 = (int)(total_s % 60);
 
-    const lv_coord_t x0 = (UI_SCREEN_W - (ROLLER_W * 3 + ROLLER_GAP * 2)) / 2;
+    const lv_coord_t x0 = (ui_scr_w() - (ROLLER_W * 3 + ROLLER_GAP * 2)) / 2;
     s_roller_h = make_roller(s_setup_box, x0, 24, h0);
     s_roller_m = make_roller(s_setup_box, x0 + ROLLER_W + ROLLER_GAP, 60, m0);
     s_roller_s = make_roller(s_setup_box, x0 + (ROLLER_W + ROLLER_GAP) * 2, 60, s0);

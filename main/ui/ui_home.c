@@ -10,8 +10,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define CARD_W      96
-#define CARD_H      160
+/* 三列等分：宽度跟随当前屏幕，横屏 320 下正好 96，竖屏 240 下约 69 */
+#define CARD_W      ((ui_scr_w() - CARD_X0 * 2 - CARD_GAP * 2) / 3)
+/*! 竖屏高 320，卡片可以放高一些；横屏维持 160 */
+#define CARD_H      ((ui_scr_h() >= 300) ? 216 : 160)
 #define CARD_Y      32
 #define CARD_X0     8
 #define CARD_GAP    8
@@ -223,7 +225,12 @@ void ui_home_create(lv_obj_t *root)
      * 给滑块让出空间 —— 轨道本身不缩，蓝条从轨道左端起画，天然对齐。 */
     lv_obj_t *slider = lv_slider_create(root);
     lv_obj_remove_flag(slider, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(slider, 162, 18);
+    /* 宽度跟着屏幕走：竖屏 240 下原来写死的 162 会压到左边的亮度数值上 */
+    lv_coord_t slider_w = ui_scr_w() - 140;
+    if (slider_w < 80) {
+        slider_w = 80;
+    }
+    lv_obj_set_size(slider, slider_w, 18);
     lv_obj_align(slider, LV_ALIGN_BOTTOM_RIGHT, -18, -13);
     lv_obj_set_style_bg_color(slider, UI_COLOR_SURFACE, LV_PART_MAIN);
     lv_obj_set_style_bg_color(slider, UI_COLOR_PRIMARY, LV_PART_INDICATOR);

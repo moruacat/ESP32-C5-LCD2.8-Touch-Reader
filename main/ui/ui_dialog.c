@@ -449,7 +449,6 @@ void ui_picker_show(const char *title, int col_count, const ui_picker_col_t *col
 /* ===================== 数值输入层（数字键盘） ===================== */
 
 #define NUM_PANEL_H  66
-#define NUM_KB_TOP   74
 #define NUM_KB_H     160
 #define NUM_TEXT_MAX 8
 
@@ -618,7 +617,8 @@ void ui_number_input_show_ex(const char *title, int min_value, int max_value,
 
     lv_obj_t *kb = lv_keyboard_create(mask);
     lv_obj_set_size(kb, ui_scr_w() - 16, NUM_KB_H);
-    lv_obj_align(kb, LV_ALIGN_TOP_MID, 0, NUM_KB_TOP);
+    /* 贴底：键盘底边与屏幕底边齐平（竖屏时也不会浮在半空） */
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(kb, 0, 0);
     lv_obj_set_style_radius(kb, 0, 0);
@@ -645,8 +645,7 @@ void ui_number_input_show(const char *title, int min_value, int max_value,
 
 /* ===================== 文字输入层（标题 + 输入框 + 屏幕键盘） ===================== */
 
-/*! 键盘区顶边与高度：240 高的屏，5 行键、每行约 28px */
-#define INPUT_KB_TOP     74
+/*! 键盘高度：240 高的屏，5 行键、每行约 28px */
 #define INPUT_KB_H       160
 /*! 输入框内容上限（缓冲区的栈开销也在 LVGL 任务上，别开太大） */
 #define INPUT_TEXT_MAX   128
@@ -869,7 +868,9 @@ void ui_text_input_show_init(const char *title, uint32_t max_len, const char *in
 
     lv_obj_t *kb = lv_keyboard_create(mask);
     lv_obj_set_size(kb, ui_scr_w() - 16, INPUT_KB_H);
-    lv_obj_align(kb, LV_ALIGN_TOP_MID, 0, INPUT_KB_TOP);
+    /* 贴底：底边与屏幕底边齐平。横屏单词页曾经因为写死顶边 y=74、
+     * 键盘高 160，底部正好差 6px，看起来像悬空。 */
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(kb, 0, 0);
     lv_obj_set_style_radius(kb, 0, 0);
@@ -1087,7 +1088,7 @@ void ui_pass_input_show(const char *title, ui_text_input_cb_t cb, void *arg)
     lv_buttonmatrix_set_map(kb, map);
     lv_buttonmatrix_set_ctrl_map(kb, ctrl);
     lv_obj_set_size(kb, ui_scr_w() - 16, 152);
-    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(kb, 0, 0);
     lv_obj_set_style_radius(kb, 0, 0);

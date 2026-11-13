@@ -104,12 +104,25 @@ void app_navigator_hide(void);
 app_page_id_t app_navigator_current(void);
 
 /**
- * @brief 在书架/音乐页切换横屏/竖屏
+ * @brief 切换当前页面的横屏/竖屏（全局方向，所有可旋转页面共用）
  *
- * 只对 PAGE_BOOKSHELF、PAGE_MUSIC 生效。旋转后会原地重建当前页面；
- * 切换到其他页面时导航器会自动恢复 0° 横屏。
+ * 时钟、日历、游戏页锁定横屏，不响应；其余页面旋转后会原地重建当前页面。
+ * 方向只在内存里保留一份（全局），切换页面时自动套用，并落盘到 CFG_ROT。
  */
 void app_navigator_toggle_page_rotation(void);
+
+/**
+ * @brief 这个页面是否允许旋转（时钟、日历、游戏页固定横屏）
+ */
+bool app_navigator_page_can_rotate(app_page_id_t page);
+
+/**
+ * @brief 当前（或正在构建的）页面是否允许旋转
+ *
+ * 标题栏据此决定右端要不要放旋转键：页面构建期间按正在构建的页面判断，
+ * 其它时候按当前页面判断。
+ */
+bool app_navigator_rotation_allowed(void);
 
 /**
  * @brief 当前页面的上一页（返回栈顶）；栈空时返回 PAGE_CLOCK

@@ -20,12 +20,12 @@
 
 static const char *TAG = "ui_photos";
 
-/* ===================== 布局（横屏 320x240） ===================== */
+/* ===================== 布局（跟随当前屏幕方向） ===================== */
 
 /* 列表用滚轮承载（同阅读器的章节列表）：几百张照片只建一个 LVGL 对象，
  * 逐行建对象的话 500 张就是 1500+ 个，内部 RAM 扛不住。 */
 #define ROLLER_X    8
-#define ROLLER_W    304
+#define ROLLER_W    (ui_scr_w() - ROLLER_X * 2)
 #define INDEX_Y     (UI_TITLEBAR_H + 2)
 #define INDEX_H     22
 #define ROLLER_Y    (INDEX_Y + INDEX_H + 4)
@@ -37,14 +37,16 @@ static const char *TAG = "ui_photos";
 
 /* ===== 缩略图网格：一页 4x2 = 8 张，翻页切换 =====
  * 逐张缩略图从原图（320x240 RGB565）最近邻采样到 72x54，一页 8 张约 62KB PSRAM。
- * 只建 8 个图片对象，几百张照片也不会把 LVGL 对象数撑爆。 */
+ * 只建 8 个图片对象，几百张照片也不会把 LVGL 对象数撑爆。
+ * 竖屏 240 宽时 4 列放不下 76px 的格子，等比收窄到 55px。 */
 #define GRID_COLS   4
 #define GRID_ROWS   2
 #define GRID_PAGE   (GRID_COLS * GRID_ROWS)
-#define CELL_W      76
-#define CELL_H      66
-#define THUMB_W     72
-#define THUMB_H     54
+#define GRID_WIDE   (ui_scr_w() >= 300)
+#define CELL_W      (GRID_WIDE ? 76 : 55)
+#define CELL_H      (GRID_WIDE ? 66 : 48)
+#define THUMB_W     (GRID_WIDE ? 72 : 51)
+#define THUMB_H     (GRID_WIDE ? 54 : 38)
 #define GRID_Y      (ROLLER_Y)
 
 /*! 预读任务的栈：里面有 fopen/fread（SD 卡驱动也要用栈） */
@@ -647,7 +649,7 @@ void ui_photos_create(lv_obj_t *root)
     /* ===== 缩略图网格（滚轮隐藏，网格接管） ===== */
     s_grid = lv_obj_create(root);
     lv_obj_remove_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_grid, UI_SCREEN_W, GRID_ROWS * CELL_H + 4);
+    lv_obj_set_size(s_grid, ui_scr_w(), GRID_ROWS * CELL_H + 4);
     lv_obj_set_pos(s_grid, 0, GRID_Y);
     lv_obj_set_style_bg_opa(s_grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_grid, 0, 0);
@@ -751,7 +753,7 @@ void ui_photos_create(lv_obj_t *root)
     s_fs = lv_obj_create(root);
     lv_obj_remove_flag(s_fs, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_fs, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(s_fs, UI_SCREEN_W, UI_SCREEN_H);
+    lv_obj_set_size(s_fs, ui_scr_w(), ui_scr_h());
     lv_obj_set_pos(s_fs, 0, 0);
     lv_obj_set_style_bg_color(s_fs, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_fs, LV_OPA_COVER, 0);   /* 全屏看图，底下一点都不露 */
@@ -763,7 +765,13 @@ void ui_photos_create(lv_obj_t *root)
     lv_obj_add_event_cb(s_fs, fs_released_cb, LV_EVENT_RELEASED, NULL);
 
     s_img = lv_image_create(s_fs);
-    lv_obj_center(s_img);                             /* 320x240 正好铺满，不用缩放 */
+    /* 照片固定 320x240；竖屏时等比缩小到屏幕内，横屏保持 1:1 铺满 */
+    {
+        int32_t sx = ((int32_t)ui_scr_w() * 256) / SRV_PHOTO_W;
+        int32_t sy = ((int32_t)ui_scr_h() * 256) / SRV_PHOTO_H;
+        lv_image_set_scale(s_img, (uint32_t)((sx < sy) ? sx : sy));
+    }
+    lv_obj_center(s_img);                             /* 横屏 320x240 正好铺满 */
 
     /* 底部文件名 + 序号：叠在图上，加半透明底免得白底照片上看不清 */
     s_fs_name = lv_label_create(s_fs);
@@ -773,7 +781,7 @@ void ui_photos_create(lv_obj_t *root)
     lv_obj_set_style_bg_opa(s_fs_name, LV_OPA_60, 0);
     lv_obj_set_style_pad_all(s_fs_name, 3, 0);
     lv_obj_set_style_radius(s_fs_name, 4, 0);
-    lv_obj_set_width(s_fs_name, UI_SCREEN_W - 16);
+    lv_obj_set_width(s_fs_name, ui_scr_w() - 16);
     lv_obj_set_height(s_fs_name, font_ui_14.line_height + 6);
     /* 长文件名循环滚动看全称，别折成两行压到照片上 */
     lv_label_set_long_mode(s_fs_name, LV_LABEL_LONG_SCROLL_CIRCULAR);

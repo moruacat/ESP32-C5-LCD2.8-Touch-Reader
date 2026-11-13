@@ -98,7 +98,7 @@ void ui_recorder_create(lv_obj_t *root)
     lv_obj_set_style_text_color(s_state_lb, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(s_state_lb, &font_ui_14, 0);
     /* 存的路径可能很长（rec-123.wav），限宽 + 单行滚动，别撑出屏幕 */
-    lv_obj_set_width(s_state_lb, UI_SCREEN_W - 16);
+    lv_obj_set_width(s_state_lb, ui_scr_w() - 16);
     lv_obj_set_height(s_state_lb, font_ui_14.line_height);
     lv_obj_set_style_text_align(s_state_lb, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_state_lb, LV_LABEL_LONG_SCROLL_CIRCULAR);
