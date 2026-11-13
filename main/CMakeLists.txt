@@ -114,3 +114,11 @@ idf_component_register(
         #   就报 "esp_timer.h: No such file or directory"。自己用的头，自己声明。
         esp_timer
 )
+
+# LVGL 9.6 把**整个** flags API（lv_obj_add_flag / lv_obj_remove_flag /
+# lv_obj_has_flag）标记成弃用，推荐改用 lv_obj_set_hidden 这类专用函数，
+# 但明确 v10 才移除，9.6 下功能完全正常。项目在 ui/ 里这类调用有 249 处，
+# 逐个迁移风险远大于收益，所以这里只对 main 组件关掉这一条告警
+# （bsp 和 adapter 组件一处都没用，不受影响，IDF 自身的告警也不受影响）。
+# 等真要升 LVGL v10 时，再按官方映射统一换掉。
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-deprecated-declarations)
