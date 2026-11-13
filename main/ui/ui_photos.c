@@ -35,18 +35,19 @@ static const char *TAG = "ui_photos";
 #define BTN_W       110
 #define BTN_H       30
 
-/* ===== 缩略图网格：一页 4x2 = 8 张，翻页切换 =====
- * 逐张缩略图从原图（320x240 RGB565）最近邻采样到 72x54，一页 8 张约 62KB PSRAM。
+/* ===== 缩略图网格：一页 8 张，横屏 4x2、竖屏 2x4，翻页切换 =====
+ * 逐张缩略图从原图（320x240 RGB565）最近邻采样，一页 8 张约 62KB PSRAM。
  * 只建 8 个图片对象，几百张照片也不会把 LVGL 对象数撑爆。
- * 竖屏 240 宽时 4 列放不下 76px 的格子，等比收窄到 55px。 */
-#define GRID_COLS   4
-#define GRID_ROWS   2
-#define GRID_PAGE   (GRID_COLS * GRID_ROWS)
-#define GRID_WIDE   (ui_scr_w() >= 300)
-#define CELL_W      (GRID_WIDE ? 76 : 55)
-#define CELL_H      (GRID_WIDE ? 66 : 48)
-#define THUMB_W     (GRID_WIDE ? 72 : 51)
-#define THUMB_H     (GRID_WIDE ? 54 : 38)
+ * 竖屏（240 宽）放不下 4 列 76px 的格子，改成 2 列 4 行，格子拉宽。 */
+#define GRID_PAGE   8
+#define GRID_COLS   ((ui_scr_w() < ui_scr_h()) ? 2 : 4)
+#define GRID_ROWS   (GRID_PAGE / GRID_COLS)
+#define GRID_WIDE   (ui_scr_w() >= ui_scr_h())
+#define CELL_W      (GRID_WIDE ? 76 : 112)
+#define CELL_H      (GRID_WIDE ? 66 : 52)
+#define THUMB_W     (GRID_WIDE ? 72 : 108)
+#define THUMB_H     (GRID_WIDE ? 54 : 50)
+#define GRID_H      (GRID_ROWS * CELL_H + (GRID_ROWS - 1) * 4 + 4)
 #define GRID_Y      (ROLLER_Y)
 
 /*! 预读任务的栈：里面有 fopen/fread（SD 卡驱动也要用栈） */
@@ -346,14 +347,26 @@ static void grid_free(void)
     }
 }
 
-/* 最近邻采样：320x240 RGB565 -> 72x54 */
+/* 最近邻采样：横屏整图 320x240 -> 72x54；竖屏 2 列时目标更宽扁，
+ * 取原图中间一块（裁掉上下）再缩，避免照片被压扁。 */
 static void thumb_make(const uint8_t *src, uint8_t *dst)
 {
+    int crop_w = SRV_PHOTO_W;
+    int crop_h = SRV_PHOTO_H;
+
+    if ((long)THUMB_W * SRV_PHOTO_H > (long)THUMB_H * SRV_PHOTO_W) {
+        crop_h = (int)((long)SRV_PHOTO_W * THUMB_H / THUMB_W);
+    } else {
+        crop_w = (int)((long)SRV_PHOTO_H * THUMB_W / THUMB_H);
+    }
+    const int off_x = (SRV_PHOTO_W - crop_w) / 2;
+    const int off_y = (SRV_PHOTO_H - crop_h) / 2;
+
     for (int y = 0; y < THUMB_H; y++) {
-        const int sy = y * SRV_PHOTO_H / THUMB_H;
+        const int sy = off_y + y * crop_h / THUMB_H;
         const uint8_t *row = src + (size_t)sy * SRV_PHOTO_W * 2;
         for (int x = 0; x < THUMB_W; x++) {
-            const int sx = x * SRV_PHOTO_W / THUMB_W;
+            const int sx = off_x + x * crop_w / THUMB_W;
             const uint8_t *p = row + sx * 2;
             *dst++ = p[0];
             *dst++ = p[1];
@@ -649,7 +662,7 @@ void ui_photos_create(lv_obj_t *root)
     /* ===== 缩略图网格（滚轮隐藏，网格接管） ===== */
     s_grid = lv_obj_create(root);
     lv_obj_remove_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_grid, ui_scr_w(), GRID_ROWS * CELL_H + 4);
+    lv_obj_set_size(s_grid, ui_scr_w(), GRID_H);
     lv_obj_set_pos(s_grid, 0, GRID_Y);
     lv_obj_set_style_bg_opa(s_grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_grid, 0, 0);

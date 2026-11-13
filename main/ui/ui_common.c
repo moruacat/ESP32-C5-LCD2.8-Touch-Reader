@@ -249,12 +249,18 @@ static void titlebar_rotate_cb(lv_event_t *e)
  *
  * 旋转不是高频操作，做成实心文字按钮会一直抢视线；这里用暗色图标，
  * 找得到、但不显眼。按下时仍有统一的背景反馈。
+ *
+ * @param left true = 放在返回键右侧（页面标题需要整行宽度时用，如单词页）
  */
-static lv_obj_t *titlebar_rotate_button_create(lv_obj_t *bar)
+static lv_obj_t *titlebar_rotate_button_create(lv_obj_t *bar, bool left)
 {
     lv_obj_t *btn = lv_button_create(bar);
     lv_obj_set_size(btn, TITLEBAR_ROT_W, 22);
-    lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -4, 0);
+    if (left) {
+        lv_obj_align(btn, LV_ALIGN_LEFT_MID, 32, 0);
+    } else {
+        lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -4, 0);
+    }
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_set_style_pad_all(btn, 0, 0);
@@ -364,7 +370,7 @@ lv_obj_t *ui_titlebar_left_button_create(lv_obj_t *bar, const char *text,
  */
 static lv_obj_t *titlebar_build(lv_obj_t *parent, const char *title,
                                 lv_event_cb_t back_cb, void *back_arg,
-                                bool with_clock)
+                                bool with_clock, bool rot_left)
 {
     /* 只有页面根部才配旋转键：弹层的父对象（整屏遮罩 / 独立面板）没有这个标记 */
     const bool with_rot = (parent != NULL) &&
@@ -422,21 +428,22 @@ static lv_obj_t *titlebar_build(lv_obj_t *parent, const char *title,
      * 比按子对象下标去猜稳（有没有返回键会让下标错位）。 */
     lv_obj_set_user_data(bar, ttl);
 
-    /* 右端旋转键：小图标、无底色，只在可旋转的页面出现 */
+    /* 右端（或返回键右侧）旋转键：小图标、无底色，只在可旋转的页面出现 */
     if (with_rot) {
-        titlebar_rotate_button_create(bar);
+        titlebar_rotate_button_create(bar, rot_left);
     }
 
     if (!with_clock) {
         return bar;                    /* 右侧那块留给调用方（游戏页放菜单键） */
     }
 
-    /* 右侧 HH:MM：有旋转键时给它让出位置 */
+    /* 右侧 HH:MM：右端有旋转键时给它让出位置 */
     lv_obj_t *tm = lv_label_create(bar);
     lv_obj_set_style_text_color(tm, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(tm, &font_ui_14, 0);
     lv_label_set_text(tm, "--:--");
-    lv_obj_align(tm, LV_ALIGN_RIGHT_MID, with_rot ? -(TITLEBAR_ROT_W + 8) : -6, 0);
+    lv_obj_align(tm, LV_ALIGN_RIGHT_MID,
+                 (with_rot && !rot_left) ? -(TITLEBAR_ROT_W + 8) : -6, 0);
     titlebar_fill_time(tm);                       /* 立即填一次 */
     /* 1 秒刷一次。
      * 原来写的是 20 秒，但标题栏只显示到分钟 —— 也就是最多要等 80 秒
@@ -452,13 +459,19 @@ static lv_obj_t *titlebar_build(lv_obj_t *parent, const char *title,
 lv_obj_t *ui_titlebar_create(lv_obj_t *parent, const char *title,
                              lv_event_cb_t back_cb, void *back_arg)
 {
-    return titlebar_build(parent, title, back_cb, back_arg, true);
+    return titlebar_build(parent, title, back_cb, back_arg, true, false);
 }
 
 lv_obj_t *ui_titlebar_create_plain(lv_obj_t *parent, const char *title,
                                    lv_event_cb_t back_cb, void *back_arg)
 {
-    return titlebar_build(parent, title, back_cb, back_arg, false);
+    return titlebar_build(parent, title, back_cb, back_arg, false, false);
+}
+
+lv_obj_t *ui_titlebar_create_plain_rot_left(lv_obj_t *parent, const char *title,
+                                            lv_event_cb_t back_cb, void *back_arg)
+{
+    return titlebar_build(parent, title, back_cb, back_arg, false, true);
 }
 
 void ui_titlebar_set_title(lv_obj_t *bar, const char *title)
@@ -697,8 +710,9 @@ lv_obj_t *ui_row_create(lv_obj_t *parent, lv_coord_t y,
     lv_obj_set_style_radius(row, 6, 0);
     lv_obj_set_style_pad_all(row, 0, 0);
 
-    /* 竖屏（240 宽）行只有 224：图标很占地方，省掉它把宽度留给名称 */
-    const bool show_icon = (icon != NULL) && (ui_scr_w() >= 300);
+    /* 竖屏（240 宽）行只有 224，图标很占地方；但图标是列表的视觉锚点，
+     * 横竖屏都保留，名称宽度按行宽比例收窄即可。 */
+    const bool show_icon = (icon != NULL);
 
     if (show_icon) {
         lv_obj_t *ic = lv_image_create(row);
@@ -729,8 +743,9 @@ lv_obj_t *ui_row_value_create(lv_obj_t *row, lv_coord_t right_ofs, lv_coord_t w)
     lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(lb, &font_ui_14, 0);
     lv_obj_set_style_text_align(lb, LV_TEXT_ALIGN_CENTER, 0);
-    /* 右侧数值区同样夹到行宽的 45%，竖屏下不跟名称抢位置 */
-    const lv_coord_t max_w = (lv_obj_get_width(row) * 45) / 100;
+    /* 右侧数值区夹到行宽的 45%。行宽用宏算：行对象此时还没布局，
+     * lv_obj_get_width() 会返回 0，全被夹成 0 宽就整个看不见了。 */
+    const lv_coord_t max_w = (UI_ROW_W * 45) / 100;
     if (w > max_w) {
         w = max_w;
     }
@@ -743,8 +758,9 @@ lv_obj_t *ui_row_btn_create(lv_obj_t *row, lv_coord_t right_ofs, lv_coord_t w,
                             const char *text, lv_event_cb_t cb, void *arg)
 {
     /* 竖屏行宽只有 224，右侧按钮不能按横屏的宽度铺；夹到行宽的 40% 以内，
-     * 免得盖住左边的名称（横屏 304*40% ≈ 122，多数按钮 60~100 不受影响）。 */
-    const lv_coord_t max_w = (lv_obj_get_width(row) * 40) / 100;
+     * 免得盖住左边的名称。行宽直接用宏：行对象刚建好还没布局，
+     * lv_obj_get_width() 返回 0，会把按钮宽度夹成 0（整个按钮消失）。 */
+    const lv_coord_t max_w = (UI_ROW_W * 40) / 100;
     if (w > max_w) {
         w = max_w;
     }

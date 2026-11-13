@@ -148,6 +148,16 @@ lv_obj_t *ui_titlebar_create_plain(lv_obj_t *parent, const char *title,
                                    lv_event_cb_t back_cb, void *back_arg);
 
 /**
+ * @brief 同 ui_titlebar_create_plain，但把旋转键放到返回键右侧
+ *
+ * 给「右侧还要放一整排按钮、标题又需要居中」的页面用（单词页的查词/译
+ * 两个模式按钮就在标题栏右端），避免旋转键和模式按钮把标题挤没。
+ * 不带 HH:MM。
+ */
+lv_obj_t *ui_titlebar_create_plain_rot_left(lv_obj_t *parent, const char *title,
+                                            lv_event_cb_t back_cb, void *back_arg);
+
+/**
  * @brief 改标题栏上的标题文字
  *
  * 给「标题要晚一步才知道」的页面用（阅读器打开完才拿得到书名）。

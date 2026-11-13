@@ -18,11 +18,6 @@
 #define Y0          UI_CONTENT_Y
 #define GAP         8
 #define COL_STEP    (COL_W + GAP)
-#define ROW1_H      64
-#define ROW2_H      56
-#define ROW3_H      56
-#define ROW2_Y      (Y0 + ROW1_H + GAP)
-#define ROW3_Y      (Y0 + ROW1_H + GAP + ROW2_H + GAP)
 
 /* 第三行 4 格（照片/录音机/AI/计算器）：横屏 4*70 + 3*8 = 304，与两边 8px 边距正好对上 */
 #define COL4_W      ((ui_scr_w() - X0 * 2 - GAP * 3) / 4)
@@ -112,28 +107,37 @@ void ui_func_create(lv_obj_t *root)
 {
     ui_titlebar_create(root, "功能", app_navigator_back_smart_cb, NULL);
 
+    /* 三行按屏幕高度均分（比例 64:56:56），底行贴着屏幕下沿 ——
+     * 竖屏 320 高时原来固定行高会把底部空出一大块。 */
+    const lv_coord_t avail   = ui_scr_h() - Y0 - 8;
+    const lv_coord_t total   = avail - GAP * 2;
+    const lv_coord_t row1_h  = total * 64 / 176;
+    const lv_coord_t row2_h  = total * 56 / 176;
+    const lv_coord_t row3_h  = total - row1_h - row2_h;
+    const lv_coord_t row2_y  = Y0 + row1_h + GAP;
+    const lv_coord_t row3_y  = row2_y + row2_h + GAP;
+
     /* 第一行：书架跨两列 */
-    ui_card_create(root, X0, Y0, COL_W * 2 + GAP, ROW1_H,
+    ui_card_create(root, X0, Y0, COL_W * 2 + GAP, row1_h,
                    &ic_bookshelf, "书架", 0x8B5A2B, on_bookshelf, NULL);
 
     /* 第二行：游戏 | 电台 */
-    ui_card_create(root, X0, ROW2_Y, COL_W, ROW2_H,
+    ui_card_create(root, X0, row2_y, COL_W, row2_h,
                    &ic_game, "游戏", 0xC06A2B, on_games, NULL);
-    ui_card_create(root, X0 + COL_STEP, ROW2_Y, COL_W, ROW2_H,
+    ui_card_create(root, X0 + COL_STEP, row2_y, COL_W, row2_h,
                    &ic_radio, "电台", 0x1585C0, on_radio, NULL);
 
-    /* 第三行：照片 | 录音机 | AI | 计算器
-     * 加入计算器后第三行改成 4 格：4*70 + 3*8 = 304，正好铺满一行 */
-    ui_card_create(root, X0, ROW3_Y, COL4_W, ROW3_H,
+    /* 第三行：照片 | 录音机 | AI | 计算器（4 格等分铺满） */
+    ui_card_create(root, X0, row3_y, COL4_W, row3_h,
                    &ic_image, "照片", 0x3B9EFF, on_photos, NULL);
-    ui_card_create(root, X0 + COL4_STEP, ROW3_Y, COL4_W, ROW3_H,
+    ui_card_create(root, X0 + COL4_STEP, row3_y, COL4_W, row3_h,
                    &ic_record, "录音机", 0xE5484D, on_recorder, NULL);
-    ui_card_create(root, X0 + COL4_STEP * 2, ROW3_Y, COL4_W, ROW3_H,
+    ui_card_create(root, X0 + COL4_STEP * 2, row3_y, COL4_W, row3_h,
                    &ic_ai, "AI", 0x7C4DFF, on_ai, NULL);
-    ui_card_create(root, X0 + COL4_STEP * 3, ROW3_Y, COL4_W, ROW3_H,
+    ui_card_create(root, X0 + COL4_STEP * 3, row3_y, COL4_W, row3_h,
                    &ic_calculator, "计算器", 0xF5A623, on_calc, NULL);
 
     /* 右侧一列：音乐，跨前两行 */
-    ui_card_create(root, X0 + COL_STEP * 2, Y0, COL_W, ROW1_H + GAP + ROW2_H,
+    ui_card_create(root, X0 + COL_STEP * 2, Y0, COL_W, row1_h + GAP + row2_h,
                    &ic_music, "音乐", 0x2E8B57, on_music, NULL);
 }
