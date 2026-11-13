@@ -13,9 +13,9 @@ Windows + PySide6 的 GitHub Actions 小工具，用于：
   还在排队（`run_started_at` 为空）的运行不估算，避免误报
 - **构建完成提醒**：自动刷新时发现某次运行从"进行中"变成"已完成"，会写日志、
   高亮状态栏、响一声提示音，并通过系统托盘弹气泡通知（托盘不可用时自动退化）。
-- **局域网 OTA 推送（实验性）**：用 mDNS 扫描 `_clockreader-ota._tcp` 找设备，
-  把已下载的固件 POST 到设备。设备端 OTA 服务尚未实现，方案与分区改造见
-  [`docs/ota_eval.md`](../../docs/ota_eval.md)；当前点击推送会在探测阶段明确报错。
+- **局域网 OTA 推送**：用 mDNS 扫描 `_clockreader-ota._tcp` 找设备，把已下载的
+  固件 POST 到设备；设备校验通过后自动重启并切到另一个 app 分区（factory ↔ ota_0）。
+  接口、分区与回滚设计见 [`docs/ota_eval.md`](../../docs/ota_eval.md)。
   设备发现依赖 `zeroconf`，未安装时只影响这一项功能。
 
 工具不会自动提交/推送代码，也不会自动烧录；所有推送、下载、烧录都由界面按钮触发。

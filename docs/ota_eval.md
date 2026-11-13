@@ -1,7 +1,11 @@
 # OTA 升级方案评估（局域网 + mDNS）
 
-> 状态：**评估阶段**，设备端尚未实现，CI 工具先接入。
-> 结论先行：**可行**，Flash 空间充足；主要成本在分区表改造（需一次性完整重烧）和设备端 HTTP 服务。
+> 状态：**已落地**。设备端服务在 `main/services/srv_ota.c`，CI 工具在
+> `tools/ci_panel/app/discovery.py` + `OtaPushWorker`；
+> 2026-11-13 首次局域网 OTA 成功（固件 `v1.5.1`，分区 factory → ota_0）。
+> 结论：**可行**，Flash 空间充足；分区改造已完成（factory + ota_0，总占用 21.12 MB）。
+>
+> 尚待补齐（阶段 3）：OTA token 认证、设备端进度界面、失败回滚日志。
 
 ---
 
