@@ -28,6 +28,7 @@
 #include "ui_alarm_alert.h"
 #include "ui_ime.h"
 #include "ui_sleep.h"
+#include "ui_ota_progress.h"
 
 #include "esp_ota_ops.h"
 
@@ -170,6 +171,7 @@ void app_init_all(void)
     srv_input_init();                   /* BOOT 键：GPIO28 轮询 + 去抖 + 状态机 */
     ui_alarm_alert_init();              /* 闹钟响铃提示（注册回调，不建对象） */
     ui_sleep_init();                    /* 休眠层 + 自动变暗/锁屏（持锁改对象树） */
+    ui_ota_progress_init();             /* 局域网 OTA 进度层（默认隐藏，推送时自动浮现） */
 
     /* 8. 导航器 + UI 初始化：装主题、进时钟页、紧接着启动开机动画。
      *    放最后：动画开跑之后不希望再有初始化来抢 CPU 或抢 LVGL 锁。 */

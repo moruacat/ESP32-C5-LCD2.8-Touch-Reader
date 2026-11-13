@@ -24,6 +24,9 @@ static const char *TAG = "srv_ota";
 static httpd_handle_t s_server = NULL;
 static bool           s_mdns_up = false;
 static volatile bool  s_ota_busy = false;
+/*! 进度快照：httpd 任务写、UI 任务读。只做结构体拷贝，不加锁 ——
+ *  最坏情况是某一帧读到旧百分比，比在 hot path 里抢锁划算。 */
+static srv_ota_progress_t s_prog;
 
 /* ===================== HTTP 接口 ===================== */
 
@@ -84,6 +87,12 @@ static esp_err_t ota_post(httpd_req_t *req)
     }
 
     s_ota_busy = true;
+    s_prog.active   = true;
+    s_prog.done     = false;
+    s_prog.received = 0;
+    s_prog.total    = (uint32_t)req->content_len;
+    s_prog.percent  = 0;
+
     int remaining = req->content_len;
     int total = 0;
     while (remaining > 0) {
@@ -97,6 +106,8 @@ static esp_err_t ota_post(httpd_req_t *req)
             esp_ota_abort(handle);
             free(buf);
             s_ota_busy = false;
+            s_prog.active = false;
+            s_prog.percent = -1;
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed");
             return ESP_FAIL;
         }
@@ -106,11 +117,16 @@ static esp_err_t ota_post(httpd_req_t *req)
             esp_ota_abort(handle);
             free(buf);
             s_ota_busy = false;
+            s_prog.active = false;
+            s_prog.percent = -1;
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed");
             return ESP_FAIL;
         }
         total += n;
         remaining -= n;
+        s_prog.received = (uint32_t)total;
+        s_prog.percent  = (req->content_len > 0)
+                          ? (int)((int64_t)total * 100 / req->content_len) : -1;
     }
 
     free(buf);
@@ -132,6 +148,10 @@ static esp_err_t ota_post(httpd_req_t *req)
     }
 
     ESP_LOGI(TAG, "OTA 完成：%d 字节已写入 %s，重启后生效", total, update->label);
+    s_prog.active  = false;
+    s_prog.done    = true;
+    s_prog.percent = 100;
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, "{\"ok\":true}", 11);
 
@@ -255,4 +275,12 @@ bool srv_ota_get_endpoint(char *out, size_t out_len)
     }
     snprintf(out, out_len, "http://%s:%d", ip, OTA_HTTP_PORT);
     return true;
+}
+
+void srv_ota_get_progress(srv_ota_progress_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    *out = s_prog;
 }

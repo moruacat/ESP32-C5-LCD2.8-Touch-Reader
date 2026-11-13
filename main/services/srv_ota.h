@@ -28,6 +28,25 @@ bool srv_ota_is_serving(void);
  */
 bool srv_ota_get_endpoint(char *out, size_t out_len);
 
+/**
+ * @brief OTA 进度快照（给 UI 轮询）
+ */
+typedef struct {
+    bool     active;      /*!< 正在接收固件 */
+    bool     done;        /*!< 已写完，正在校验/重启 */
+    uint32_t received;    /*!< 已接收字节 */
+    uint32_t total;       /*!< 总字节，0 表示未知 */
+    int      percent;     /*!< 0..100；total 未知时为 -1 */
+} srv_ota_progress_t;
+
+/**
+ * @brief 读当前进度
+ *
+ * 没有更新在进行时 active/done 都是 false。UI 侧 200ms 轮询一次即可，
+ * 这只是一次结构体拷贝，不做加锁（最坏情况是某一帧读到旧值）。
+ */
+void srv_ota_get_progress(srv_ota_progress_t *out);
+
 #ifdef __cplusplus
 }
 #endif

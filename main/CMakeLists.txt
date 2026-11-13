@@ -28,6 +28,7 @@ idf_component_register(
         "ui/ui_ime.c"
         "ui/ui_alarm_alert.c"
         "ui/ui_sleep.c"
+        "ui/ui_ota_progress.c"
         "ui/ui_timer.c"
         "ui/ui_countdown.c"
         "ui/ui_recorder.c"
