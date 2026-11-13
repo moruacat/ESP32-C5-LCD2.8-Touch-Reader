@@ -2,14 +2,14 @@
 
 <p align="left">
   <img alt="ESP-IDF" src="https://img.shields.io/badge/ESP--IDF-v6.1-blue">
-  <img alt="LVGL" src="https://img.shields.io/badge/LVGL-9.5-1585C0">
+  <img alt="LVGL" src="https://img.shields.io/badge/LVGL-9.6-1585C0">
   <img alt="Target" src="https://img.shields.io/badge/target-ESP32--C5-2E8B57">
   <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-orange">
 </p>
 
 基于 **Waveshare ESP32-C5-Touch-LCD-2.8** 的便携阅读器 / 时钟项目。
 
-设备默认以时钟伪装形态显示；进入主菜单后，可使用阅读器、离线词典、单词学习、音乐、电台、录音、照片、小智 AI、游戏等功能。项目使用 **ESP-IDF v6.1 + LVGL 9.5**，界面保持深色主题，主色为 `#1585C0`。
+设备默认以时钟伪装形态显示；进入主菜单后，可使用阅读器、离线词典、单词学习、音乐、电台、录音、照片、小智 AI、游戏等功能。项目使用 **ESP-IDF v6.1 + LVGL 9.6**，界面保持深色主题，主色为 `#1585C0`。
 
 > 这是个人硬件项目，功能仍在持续完善。首次正式 Release 计划使用 `v1.0.0`，版本号以仓库最终发布的 tag 为准。
 
@@ -103,7 +103,7 @@
 ## 固件基线
 
 - ESP-IDF：**v6.1**
-- LVGL：**9.5.0**
+- LVGL：**9.6.0**
 - LVGL 适配层：`espressif/esp_lvgl_adapter` 0.4.x
 - 工程名：`clock_reader`
 - 分区：

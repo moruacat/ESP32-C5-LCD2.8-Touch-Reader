@@ -1,7 +1,9 @@
 ## IDF Component Manager Manifest File
 dependencies:
+  # 9.6.0 修复了 9.5.0 的图层泄漏（scale<=0 时 lv_draw_layer 提前返回、
+  # 图层没人回收，每帧漏一份）。见 ui/ui_oobe.c 顶部 OOBE_SCALE_MIN 的说明。
   lvgl/lvgl:
-    version: "9.5.0"
+    version: "9.6.0"
     public: true
   espressif/esp_lvgl_adapter: "^0.4.0"
   espressif/esp_audio_codec: "^2.5.0"
