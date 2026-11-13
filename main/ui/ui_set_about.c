@@ -152,6 +152,17 @@ void ui_set_about_create(lv_obj_t *root)
     lv_obj_set_style_text_color(dev, UI_COLOR_TEXT_DIM, 0);
     lv_label_set_text(dev, esp_app_get_description()->project_name);
 
+    /* 固件版本：和局域网 OTA 的 /api/info 用同一个来源（根 CMakeLists 的
+     * PROJECT_VER），升级后这里显示的就是新固件的版本，不用再改代码。 */
+    row = ui_row_create(list, UI_ROW_Y(next++), &ic_info, "固件版本");
+    lv_obj_t *ver = ui_row_value_create(row, -12, 160);
+    lv_obj_set_style_text_color(ver, UI_COLOR_TEXT_DIM, 0);
+    {
+        const esp_app_desc_t *desc = esp_app_get_description();
+        const char *text = (desc != NULL && desc->version[0] != '\0') ? desc->version : "未知";
+        lv_label_set_text_fmt(ver, "v%s", text);
+    }
+
     row = ui_row_create(list, UI_ROW_Y(next++), NULL, "弹出 SD 卡");
     s_pop_lb = ui_row_btn_create(row, -8, 64, "弹出", on_pop_click, NULL);
 
