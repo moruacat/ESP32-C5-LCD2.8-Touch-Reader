@@ -30,6 +30,37 @@
 
 static const char *TAG = "app_init";
 
+/* ===================== 开机联网的延迟 ===================== */
+
+/*! 开机后等多久再联网。
+ *
+ *  C5 是单核（CONFIG_FREERTOS_UNICORE=y），而 WiFi 驱动任务是优先级 23 的
+ *  高优先级任务；srv_wifi_set_enabled() 里 esp_wifi_start() 返回后紧接着就
+ *  srv_wifi_autoconnect() 开始扫描，扫描要持续十几秒。这段期间 LVGL 任务
+ *  几乎抢不到 CPU —— 开机动画帧率掉到 70% 上下，前几个方块的飞入整段丢掉，
+ *  看起来就是「卡片瞬移」。
+ *
+ *  所以开机不立刻联网：等动画（含起始延迟约 3.1s）放完再开射频。
+ *  代价是开机后晚 4 秒才有网，换来动画全程满帧。 */
+#define BOOT_NET_DELAY_MS  4000
+
+static void boot_net_task(void *arg)
+{
+    (void)arg;
+
+    vTaskDelay(pdMS_TO_TICKS(BOOT_NET_DELAY_MS));
+
+    /* 期间用户可能已经在设置里手动开过网/改过配置，这里再确认一次 */
+    if (srv_config_get_int(CFG_WIFI_EN, 0) != 0) {
+        srv_wifi_set_enabled(true);     /* 内部会按网络历史自动连接 */
+        srv_ntp_autostart();
+    } else {
+        ESP_LOGI(TAG, "网络开关为关（延迟检查），跳过联网与 NTP");
+    }
+
+    vTaskDelete(NULL);
+}
+
 /**
  * @brief LCD CS 上电拉高，避免 SD 卡 SPI 操作期间 LCD 被误片选
  */
@@ -132,23 +163,22 @@ void app_init_all(void)
     ui_alarm_alert_init();              /* 闹钟响铃提示（注册回调，不建对象） */
     ui_sleep_init();                    /* 休眠层 + 自动变暗/锁屏（持锁改对象树） */
 
-    /* 8. 按配置开网络并启动 NTP 校时。
-     *
-     *    这一步必须放在开机动画**之前**：WiFi 驱动初始化要跑 PHY 校准，
-     *    实测 3500→4100ms 之间占了 560ms 左右，而 C5 是单核 —— 动画和它
-     *    并发时 LVGL 任务几乎抢不到时间，前几个方块的飞入会整段丢掉，
-     *    看着就是「卡片瞬移」。压在动画前，这段开销正好落在进入动画前的
-     *    黑屏期里，用户感知不到。 */
+    /* 8. 导航器 + UI 初始化：装主题、进时钟页、紧接着启动开机动画。
+     *    放最后：动画开跑之后不希望再有初始化来抢 CPU 或抢 LVGL 锁。 */
+    app_navigator_init();
+
+    /* 9. 联网：交给延迟任务，等动画放完再开射频。
+     *    原因见 boot_net_task() 上面的说明（WiFi 驱动优先级 23 + C5 单核，
+     *    一扫描就把 LVGL 的 CPU 抢光，前几个方块会瞬移）。 */
     if (srv_config_get_int(CFG_WIFI_EN, 0) != 0) {
-        srv_wifi_set_enabled(true);     /* 内部会按网络历史自动连接 */
-        srv_ntp_autostart();
+        if (xTaskCreate(boot_net_task, "boot_net", 4096, NULL, 3, NULL) != pdPASS) {
+            ESP_LOGW(TAG, "联网任务创建失败，改为立即联网");
+            srv_wifi_set_enabled(true);
+            srv_ntp_autostart();
+        }
     } else {
         ESP_LOGI(TAG, "网络开关为关，跳过联网与 NTP");
     }
-
-    /* 9. 导航器 + UI 初始化：装主题、进时钟页、紧接着启动开机动画。
-     *    放最后：动画开跑之后不希望再有初始化来抢 CPU 或抢 LVGL 锁。 */
-    app_navigator_init();
 
     ESP_LOGI(TAG, "system init done");
 }
