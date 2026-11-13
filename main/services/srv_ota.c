@@ -78,7 +78,12 @@ static esp_err_t ota_post(httpd_req_t *req)
     }
 
     esp_ota_handle_t handle = 0;
-    esp_err_t err = esp_ota_begin(update, OTA_SIZE_UNKNOWN, &handle);
+    /* 用 Content-Length 当镜像大小：esp_ota_begin 只擦这么大。
+     * 传 OTA_SIZE_UNKNOWN 会把整个 6MB 分区都擦掉，白花十几秒，
+     * 期间 flash cache 长时间关闭，WiFi 更容易掉。 */
+    size_t image_size = (req->content_len > 0) ? (size_t)req->content_len
+                                               : (size_t)OTA_SIZE_UNKNOWN;
+    esp_err_t err = esp_ota_begin(update, image_size, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin 失败：%s", esp_err_to_name(err));
         free(buf);
@@ -171,7 +176,11 @@ static esp_err_t serving_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port    = OTA_HTTP_PORT;
     cfg.max_open_sockets = 2;
-    cfg.stack_size     = 8192;
+    /* esp_ota_write + flash 擦写在 httpd 任务栈里跑，默认 4KB 太紧；
+     * 8KB 够用，这里再留一半余量，避免栈溢出直接 panic 重启。 */
+    cfg.stack_size     = 12288;
+    /* 擦除大块时客户端会被 TCP 窗口堵住，给接收多留点余量 */
+    cfg.recv_wait_timeout = 10;
     cfg.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&s_server, &cfg);
@@ -215,6 +224,14 @@ static esp_err_t serving_start(void)
 
 static void serving_stop(void)
 {
+    if (s_ota_busy) {
+        /* 正在收固件时绝不能关服务：httpd_stop() 会把当前 socket 一起关掉，
+         * 客户端看到的就是「远程主机强迫关闭了一个现有的连接」(10054)。
+         * 擦除大分区时 flash cache 关闭，WiFi 可能短暂报断连，监控任务
+         * 正好会撞上这里 —— 放它过去，等这一轮写完自然结束。 */
+        ESP_LOGW(TAG, "OTA 进行中，暂不停止服务");
+        return;
+    }
     if (s_server != NULL) {
         httpd_stop(s_server);
         s_server = NULL;
