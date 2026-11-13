@@ -12,3 +12,7 @@ dependencies:
   # esp_xiaozhi 的公共头里引用了 esp_mcp_engine.h，而它是组件的 PRIV_REQUIRES，
   # 所以 main 必须自己声明一份，否则编译找不到头文件
   espressif/mcp-c-sdk: "^2.0.1"
+  # 局域网 OTA 的设备发现（见 docs/ota_eval.md）。
+  # ESP-IDF 6.x 把 mDNS 从内置组件移到了组件仓库，REQUIRES 里直接写 'mdns'
+  # 会报错 "Failed to resolve component 'mdns'"，必须在这里声明依赖。
+  espressif/mdns: "^1.8.0"
