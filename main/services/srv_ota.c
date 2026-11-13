@@ -68,6 +68,18 @@ static esp_err_t ota_post(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    /* 目标分区 == 当前运行分区，说明分区表里只有一个 ota 分区（通常是
+     * factory + ota_0 这种）。esp_ota_begin 会报 ESP_ERR_OTA_PARTITION_CONFLICT，
+     * 这里提前拦下来，把原因说清楚，免得只看到一个错误码。 */
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (update == running) {
+        ESP_LOGE(TAG, "目标分区就是当前运行分区（%s）：分区表缺少 ota_1，"
+                      "OTA 无法轮换，需要在 partitions.csv 里补一个 ota_1 分区",
+                 update->label);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no alternated ota partition");
+        return ESP_FAIL;
+    }
+
     ESP_LOGI(TAG, "开始 OTA：写入 %s，声明长度 %u 字节",
              update->label, (unsigned)req->content_len);
 

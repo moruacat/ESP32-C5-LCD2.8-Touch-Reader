@@ -3,9 +3,15 @@ nvs,      data, nvs,     0x9000,   0x6000,
 otadata,  data, ota,     0xf000,   0x2000,
 phy_init, data, phy,     0x11000,  0x1000,
 factory,  app,  factory, 0x20000,  0x600000,
-# 局域网 OTA 的目标分区（见 docs/ota_eval.md）：
-# 保留 factory 当串口烧录落点和回滚保底，OTA 在 factory <-> ota_0 之间轮换。
-# 注意：加这个分区会让 fonts/storage 后移，改分区表后必须完整重烧一次。
+# OTA 需要**两个** ota 分区才能持续轮换：
+#   esp_ota_get_next_update_partition() 只在 ota_0/ota_1 之间找目标，
+#   factory 不参与轮换。只有 ota_0 时，一旦从 ota_0 启动，
+#   它会返回 ota_0 自己，esp_ota_begin 直接报
+#   ESP_ERR_OTA_PARTITION_CONFLICT（只能 OTA 一次的坑）。
+#
+# 布局：factory(串口烧录) --OTA--> ota_0 <-> ota_1 轮换。
+# 注意：加 ota_1 会让 fonts/storage 再次后移，改分区表后必须完整重烧一次。
 ota_0,    app,  ota_0,   0x620000, 0x600000,
-fonts,    data, spiffs,  0xC20000, 0x400000,
-storage,  data, spiffs,  0x1020000,0x500000,
+ota_1,    app,  ota_1,   0xC20000, 0x600000,
+fonts,    data, spiffs,  0x1220000,0x400000,
+storage,  data, spiffs,  0x1620000,0x500000,

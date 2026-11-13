@@ -68,32 +68,41 @@ CI 工具 ──mDNS 发现──> clockreader.local:8080
 
 ## 3. 分区表改造
 
-### 3.1 方案 A：`factory` + `ota_0`（保留 factory）★ 推荐
+### 3.1 方案：`factory` + `ota_0` + `ota_1`（已落地）
 
 ```
 nvs      0x009000  0x6000
 otadata  0x00F000  0x2000
 phy_init 0x011000  0x1000
 factory  0x020000  0x600000   6 MB   ← 串口烧录 / 回滚保底
-ota_0    0x620000  0x600000   6 MB   ← 新增：OTA 目标
-fonts    0xC20000  0x400000   4 MB   ← 后移
-storage  0x1020000 0x500000   5 MB   ← 后移
+ota_0    0x620000  0x600000   6 MB   ← OTA 目标（第一次从 factory 进来）
+ota_1    0xC20000  0x600000   6 MB   ← OTA 目标（之后轮换）
+fonts    0x1220000 0x400000   4 MB
+storage  0x1620000 0x500000   5 MB
 ```
 
-- 总占用 0x1520000 ≈ **21.1 MB ≤ 32 MB**，余量约 10.9 MB。
-- `factory` 保留：串口烧录流程（`clock_reader.bin → 0x20000`）不变，第一次刷机不受影响。
-- 之后 OTA 在 `factory ↔ ota_0` 之间轮换。
+- 总占用 0x1B20000 ≈ **28.4 MB ≤ 32 MB**。
+- 启动路径：`factory` →（OTA）→ `ota_0` ⇄ `ota_1` 轮换。
 
-### 3.2 为什么不选 `ota_0 + ota_1`
+### 3.2 为什么必须有 `ota_1`（踩过的坑）
 
-需要 12 MB 给两个 app，且必须放弃 `factory`，串口烧录的落点要改（0x10000 双 OTA 布局），**对现有流程的破坏更大**。32 MB 虽然放得下，但没必要。
+**`esp_ota_get_next_update_partition()` 只在 `ota_0` / `ota_1` 之间找目标，`factory` 不参与轮换。**
+
+只做 `factory + ota_0` 时：
+
+| 当前运行分区 | `get_next_update_partition()` | 结果 |
+|---|---|---|
+| `factory` | `ota_0` | 第一次 OTA 正常 |
+| `ota_0` | 循环回 `ota_0` 自己 | `esp_ota_begin` 报 **`ESP_ERR_OTA_PARTITION_CONFLICT`** |
+
+也就是说**只能 OTA 一次**，第二次开始必然失败。设备端现在会提前拦下这种情况并打日志说明原因，而不是只抛一个错误码。
 
 ### 3.3 风险：分区偏移变化
 
-`fonts` / `storage` 的偏移会后移，**改分区表后必须完整重烧一次固件**（配置、SPIFFS 内容都会丢）。
+`fonts` / `storage` 的偏移在加分区时会后移，**改分区表后必须完整重烧一次固件**（配置、SPIFFS 内容都会丢）。
 
-- 缓解：把这次改造和 `v1.0.0` 首次发布合并，作为"一次性迁移"。
-- 之后 OTA 只改 app 分区，**不再动 `fonts` / `storage`**。
+- 缓解：把这类改造和正式发布合并，作为"一次性迁移"。
+- 之后 OTA 只改 `ota_0` / `ota_1`，**不再动 `fonts` / `storage`**。
 
 ### 3.4 固件增长余量
 
