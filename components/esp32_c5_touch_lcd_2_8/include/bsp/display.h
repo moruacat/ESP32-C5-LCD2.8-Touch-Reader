@@ -27,11 +27,12 @@
  *   且随刷新位置到处跑 —— 典型的高速串行数据错位特征。
  *
  * 取值阶梯（只改这一个宏，驱动会自动跟随）：
- *   80 MHz  原值      ：负余量，出现错位与红线
- *   40 MHz  当前值    ：2 倍余量，整屏 320x240x2=153,600 B 刷新约 31 ms（≈32 fps）
+ *   80 MHz  当前试验值：负余量，大概率出现错位与红线（原厂驱动就是 80，被降回来的）
+ *   60 MHz  未验证    ：SPI 本身在 ST7789 的 75 MHz 规格内，比 80 安全，可当折中
+ *   40 MHz  已验证值  ：2 倍余量，整屏 320x240x2=153,600 B 刷新约 31 ms（≈32 fps）
  *   20 MHz  兜底      ：若仍有残留，降到 20 MHz 换取更稳的时序
  */
-#define BSP_LCD_PIXEL_CLOCK_HZ      (40 * 1000 * 1000)               /*!< LCD pixel clock frequency */
+#define BSP_LCD_PIXEL_CLOCK_HZ      (80 * 1000 * 1000)               /*!< LCD pixel clock frequency（试验值） */
 
 #ifdef __cplusplus
 extern "C" {
