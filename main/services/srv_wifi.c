@@ -587,6 +587,50 @@ esp_err_t srv_wifi_disconnect(void)
 
 /* ===================== 开机自动连接 ===================== */
 
+/*! 扫描结果里出现过的 SSID（去重）。
+ *
+ *  自动连接以前是「扫一遍、只取个数，然后按历史顺序逐个硬连」：历史第 1 条
+ *  哪怕根本不在范围里也照连，白等 CONNECT_WAIT_MS（15 秒）才换下一条。
+ *  这里把扫描结果留下来，遍历历史时先比对，不存在的直接跳过。
+ *
+ *  任务同一时刻只会有一个实例（s_auto_running 保证），所以用静态缓冲，
+ *  不占自动连接任务那 4KB 栈。 */
+#define AUTO_SCAN_MAX 24
+
+typedef struct {
+    char ssid[AUTO_SCAN_MAX][SRV_WIFI_SSID_MAX];
+    int  count;
+} auto_scan_t;
+
+static auto_scan_t s_auto_scan;
+
+static void auto_scan_cb(const srv_wifi_ap_t *ap, void *arg)
+{
+    auto_scan_t *list = (auto_scan_t *)arg;
+
+    /* 隐藏 SSID 扫出来是空串，匹配不了历史，交给兜底那一轮去试 */
+    if (ap->ssid[0] == '\0' || list->count >= AUTO_SCAN_MAX) {
+        return;
+    }
+    for (int i = 0; i < list->count; i++) {
+        if (strcmp(list->ssid[i], ap->ssid) == 0) {
+            return;                   /* 同一 SSID 的多个 BSSID，去重 */
+        }
+    }
+    snprintf(list->ssid[list->count], SRV_WIFI_SSID_MAX, "%s", ap->ssid);
+    list->count++;
+}
+
+static bool auto_scan_has(const char *ssid)
+{
+    for (int i = 0; i < s_auto_scan.count; i++) {
+        if (strcmp(s_auto_scan.ssid[i], ssid) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void autoconnect_task(void *arg)
 {
     (void)arg;
@@ -602,47 +646,70 @@ static void autoconnect_task(void *arg)
     }
 
     ESP_LOGI(TAG, "自动连接：开始扫描");
-    if (srv_wifi_scan(NULL, NULL, &found) != ESP_OK) {
+    s_auto_scan.count = 0;
+    if (srv_wifi_scan(auto_scan_cb, &s_auto_scan, &found) != ESP_OK) {
         s_auto_running = false;
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "扫描到 %d 个网络，按历史顺序匹配", found);
+    ESP_LOGI(TAG, "扫描到 %d 个网络，去重后 %d 个 SSID", found, s_auto_scan.count);
 
-    for (int i = 0; i < s_hist_count; i++) {
-        /* 用户自己连了别的网络，或者网络被关掉：立刻停手 */
-        if (s_auto_stop || !s_enabled) {
-            ESP_LOGI(TAG, "自动连接被取消");
-            s_auto_running = false;
-            vTaskDelete(NULL);
-            return;
+    /* 第 0 轮只连扫描结果里出现过的；一条都对不上再退回逐个硬连 ——
+     * 那是为了兜隐藏 SSID（show_hidden=false 时它不在扫描列表里）。 */
+    bool tried_any = false;
+    for (int round = 0; round < 2; round++) {
+        if (round == 1 && tried_any) {
+            break;
+        }
+        if (round == 1) {
+            ESP_LOGW(TAG, "扫描结果里没有历史网络，改为逐个尝试（可能是隐藏 SSID）");
         }
 
-        char ssid[SRV_WIFI_SSID_MAX];
-        if (srv_wifi_history_at(i, ssid, sizeof(ssid), pass, sizeof(pass)) != ESP_OK) {
-            continue;
-        }
+        for (int i = 0; i < s_hist_count; i++) {
+            /* 用户自己连了别的网络，或者网络被关掉：立刻停手 */
+            if (s_auto_stop || !s_enabled) {
+                ESP_LOGI(TAG, "自动连接被取消");
+                s_auto_running = false;
+                vTaskDelete(NULL);
+                return;
+            }
 
-        ESP_LOGI(TAG, "尝试历史第 %d 条: %s", i + 1, ssid);
-        if (srv_wifi_connect(ssid, pass, false, false) != ESP_OK) {
-            continue;
-        }
+            char ssid[SRV_WIFI_SSID_MAX];
+            if (srv_wifi_history_at(i, ssid, sizeof(ssid), pass, sizeof(pass)) != ESP_OK) {
+                continue;
+            }
 
-        EventBits_t bits = xEventGroupWaitBits(s_evt, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                               pdFALSE, pdFALSE,
-                                               pdMS_TO_TICKS(CONNECT_WAIT_MS));
-        if (bits & WIFI_CONNECTED_BIT) {
-            ESP_LOGI(TAG, "自动连接成功: %s", ssid);
-            s_auto_running = false;
-            vTaskDelete(NULL);
-            return;
+            if (round == 0 && !auto_scan_has(ssid)) {
+                ESP_LOGI(TAG, "历史第 %d 条「%s」不在扫描结果里，跳过", i + 1, ssid);
+                continue;
+            }
+
+            tried_any = true;
+            ESP_LOGI(TAG, "尝试历史第 %d 条: %s", i + 1, ssid);
+            if (srv_wifi_connect(ssid, pass, false, false) != ESP_OK) {
+                continue;
+            }
+
+            EventBits_t bits = xEventGroupWaitBits(s_evt, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                                   pdFALSE, pdFALSE,
+                                                   pdMS_TO_TICKS(CONNECT_WAIT_MS));
+            if (bits & WIFI_CONNECTED_BIT) {
+                ESP_LOGI(TAG, "自动连接成功: %s", ssid);
+                s_auto_running = false;
+                vTaskDelete(NULL);
+                return;
+            }
+            ESP_LOGW(TAG, "连接 %s 超时/失败，试下一条", ssid);
+            esp_wifi_disconnect();
+            vTaskDelay(pdMS_TO_TICKS(300));
         }
-        ESP_LOGW(TAG, "连接 %s 超时/失败，试下一条", ssid);
-        esp_wifi_disconnect();
-        vTaskDelay(pdMS_TO_TICKS(300));
     }
 
-    ESP_LOGW(TAG, "自动连接：历史中无可连接网络");
+    if (tried_any) {
+        ESP_LOGW(TAG, "自动连接：历史中无可连接网络");
+    } else {
+        ESP_LOGW(TAG, "自动连接：历史为空，或扫描结果里没有任何历史网络");
+    }
     s_auto_running = false;
     vTaskDelete(NULL);
 }
