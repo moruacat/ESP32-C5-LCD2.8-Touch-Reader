@@ -32,6 +32,6 @@ main/assets/fonts/*.bak
 tools/netprobe.out.txt
 tools/t.txt
 
-.dumate/
-.trae/
-.screenshots/
+./.dumate/
+./.trae/
+./.screenshots/
