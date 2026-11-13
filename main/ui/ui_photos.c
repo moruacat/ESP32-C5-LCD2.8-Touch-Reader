@@ -36,23 +36,21 @@ static const char *TAG = "ui_photos";
 #define BTN_H       30
 
 /* ===== 缩略图网格：横屏 4x2（8 张）、竖屏 2x3（6 张），翻页切换 =====
- * 逐张缩略图从原图（320x240 RGB565）最近邻采样。只建一页的图片对象，
- * 几百张照片也不会把 LVGL 对象数撑爆。
+ * 缩略图宽高比一律取原图的 4:3，横竖屏都同比缩放、不裁剪。
  *
- * 关于方向：屏幕 rotation=270 时，LVGL 是把整个逻辑画面转 270° 再输出，
- * 照片作为画面的一部分也会跟着转 —— 竖屏看就成侧的了。所以这里在采样阶段
- * 就把内容顺时针转 90° 抵消掉（90 + 270 = 360），物理屏幕上看到的照片
- * 方向和横屏完全一致。
+ * 竖屏缩略图**不旋转**：转过来是竖版（52x69），面积只剩 92x69 的一半多，
+ * 而缩略图只要认得出是哪张就行，优先要「大」。屏幕转的时候它跟着转就跟着转，
+ * 方向问题交给全屏那张去纠正（见 photo_rot90）。
  *
- * 旋转后照片是竖版的（240x320 逻辑），所以竖屏格子也得跟着竖过来：
- * 缩略图 52x69，物理上是 69x52（仍是 4:3 横构图），一行 3 个刚好塞进 240x320。 */
+ * 注意：横竖屏的 THUMB_W/H 不一样，切方向时旧缓冲尺寸对不上，
+ * 由 grid_fill_page() 开头的尺寸校验负责整批重建。 */
 #define GRID_WIDE   (ui_scr_w() >= ui_scr_h())
 #define GRID_COLS   (GRID_WIDE ? 4 : 2)
 #define GRID_ROWS   (GRID_WIDE ? 2 : 3)
 #define GRID_PAGE   (GRID_COLS * GRID_ROWS)
-#define CELL_W      (GRID_WIDE ? 76 : 54)
-#define CELL_H      (GRID_WIDE ? 66 : 73)
-#define THUMB_W     (GRID_WIDE ? 72 : 52)     /*!< 竖屏取的是「旋转后」的宽高 */
+#define CELL_W      (GRID_WIDE ? 76 : 96)
+#define CELL_H      (GRID_WIDE ? 66 : 71)
+#define THUMB_W     (GRID_WIDE ? 72 : 92)     /*!< 4:3，与源图同比 */
 #define THUMB_H     (GRID_WIDE ? 54 : 69)
 #define GRID_H      (GRID_ROWS * CELL_H + (GRID_ROWS - 1) * 4 + 4)
 #define GRID_Y      (ROLLER_Y)
@@ -88,6 +86,13 @@ static lv_obj_t      *s_grid_img[GRID_PAGE_MAX];
 static lv_obj_t      *s_grid_no[GRID_PAGE_MAX];
 static lv_image_dsc_t s_grid_dsc[GRID_PAGE_MAX];
 static uint8_t       *s_grid_buf[GRID_PAGE_MAX];
+/*! 这批缓冲是按多大尺寸分配的。
+ *  横竖屏 THUMB_W/H 不同（72x54 ↔ 92x69），方向一切换旧缓冲就不够大；
+ *  如果只判断「指针非空就复用」，thumb_make() 会按新尺寸往小缓冲里写，
+ *  越界把 TLSF 块头踩坏 —— 表现就是 tlsf_realloc 里
+ *  "block already marked as free" 断言、旋转后立刻重启。 */
+static int            s_grid_buf_w;
+static int            s_grid_buf_h;
 static int            s_page;
 static int            s_page_count;
 static lv_obj_t      *s_page_lb;
@@ -414,29 +419,19 @@ static void grid_free(void)
             s_grid_buf[i] = NULL;
         }
     }
+    s_grid_buf_w = 0;
+    s_grid_buf_h = 0;
 }
 
-/* 最近邻采样：原图 320x240 → 缩略图。
- *
- * 横屏：直接缩到 72x54（同比，不裁）。
- * 竖屏：先把原图顺时针转 90°（宽高互换成 240x320）再缩到 52x69，
- *       用来抵消屏幕 rotation=270 的画面旋转（90+270=360），这样物理屏上
- *       看到的照片方向和横屏完全一致。
- * 旋转映射 (sx,sy) → (H-1-sy, sx)，反推：sx = v、sy = H-1-u。 */
+/* 最近邻采样：原图 320x240 → 缩略图（等比缩放，不裁不转）。
+ * 缩略图宽高比固定 4:3（横屏 72x54、竖屏 92x69），与源图严格同比，
+ * 所以这里按比例取点就够，不需要裁剪。 */
 static void thumb_make(const uint8_t *src, uint8_t *dst)
 {
     for (int y = 0; y < THUMB_H; y++) {
+        const int sy = y * SRV_PHOTO_H / THUMB_H;
         for (int x = 0; x < THUMB_W; x++) {
-            int sx, sy;
-            if (GRID_WIDE) {
-                sx = x * SRV_PHOTO_W / THUMB_W;
-                sy = y * SRV_PHOTO_H / THUMB_H;
-            } else {
-                const int u = x * SRV_PHOTO_H / THUMB_W;   /* 旋转后图的列 0..239 */
-                const int v = y * SRV_PHOTO_W / THUMB_H;   /* 旋转后图的行 0..319 */
-                sx = v;
-                sy = SRV_PHOTO_H - 1 - u;
-            }
+            const int sx = x * SRV_PHOTO_W / THUMB_W;
             const uint8_t *p = src + ((size_t)sy * SRV_PHOTO_W + sx) * 2;
             *dst++ = p[0];
             *dst++ = p[1];
@@ -448,6 +443,24 @@ static void grid_fill_page(int page)
 {
     const int total = srv_photo_count();
     const int base = page * GRID_PAGE;
+
+    /* 方向变了（横屏 72x54 ↔ 竖屏 92x69）：旧缓冲的尺寸和当前 THUMB_W/H 对不上，
+     * 必须整批丢掉重来。只判断「指针非空就复用」的话，thumb_make() 会按新尺寸
+     * 往旧的小缓冲里写，越界把 TLSF 块头踩坏 —— 就是旋转后 tlsf_realloc
+     * "block already marked as free" 崩溃的来源。
+     * 旧页面的对象此时已经在非活动屏上、不会再绘制，这里释放是安全的；
+     * 它稍后的删除回调会因为 s_root 换人而直接 return，不会二次释放。 */
+    if (s_grid_buf_w != THUMB_W || s_grid_buf_h != THUMB_H) {
+        for (int i = 0; i < GRID_PAGE_MAX; i++) {
+            if (s_grid_buf[i] != NULL) {
+                lv_image_cache_drop(&s_grid_dsc[i]);
+                free(s_grid_buf[i]);
+                s_grid_buf[i] = NULL;
+            }
+        }
+        s_grid_buf_w = THUMB_W;
+        s_grid_buf_h = THUMB_H;
+    }
 
     for (int i = 0; i < GRID_PAGE; i++) {
         const int idx = base + i;
@@ -689,6 +702,15 @@ static void photos_root_del_cb(lv_event_t *e)
 
 void ui_photos_create(lv_obj_t *root)
 {
+    /* 旋转 / 重新进页时，上一轮页面可能还没被异步删掉：它的删除回调会因为
+     * s_root 已经换人而直接 return，于是遗留的缩略图缓冲、全屏照片、选项弹层
+     * 就都没人收。这里先收干净再建新页面，否则新页面会直接踩到旧缓冲
+     * （尺寸还可能对不上，见 grid_fill_page 里的说明）。 */
+    fs_free();
+    grid_free();
+    opts_free();
+    pre_stop();              /* 上一轮预读结果按 s_pre_gen 丢弃，末尾会重新打开 */
+
     s_root = root;
 
     ui_titlebar_create(root, "照片", app_navigator_back_smart_cb, NULL);
