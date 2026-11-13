@@ -36,23 +36,26 @@ static const char *TAG = "ui_photos";
 #define BTN_H       30
 
 /* ===== 缩略图网格：横屏 4x2（8 张）、竖屏 2x3（6 张），翻页切换 =====
- * 逐张缩略图从原图（320x240 RGB565）最近邻采样，横屏一页 8 张约 62KB PSRAM，
- * 竖屏一页 6 张约 76KB。
- * 只建一页的图片对象，几百张照片也不会把 LVGL 对象数撑爆。
+ * 逐张缩略图从原图（320x240 RGB565）最近邻采样。只建一页的图片对象，
+ * 几百张照片也不会把 LVGL 对象数撑爆。
  *
- * 缩略图宽高比一律取原图的 4:3，横竖屏都正好整除、不裁剪 —— 竖屏原来用
- * 108x50（2.16:1），thumb_make() 只能从 240 行里裁掉 92 行，边缘就缺一块。
- * 注意：这里只改采样比例，**不旋转图像内容**，所以旋转屏幕后照片方向
- * 和横屏时一致，只是排版从 4 列变 2 列。 */
+ * 关于方向：屏幕 rotation=270 时，LVGL 是把整个逻辑画面转 270° 再输出，
+ * 照片作为画面的一部分也会跟着转 —— 竖屏看就成侧的了。所以这里在采样阶段
+ * 就把内容顺时针转 90° 抵消掉（90 + 270 = 360），物理屏幕上看到的照片
+ * 方向和横屏完全一致。
+ *
+ * 旋转后照片是竖版的（240x320 逻辑），所以竖屏格子也得跟着竖过来：
+ * 缩略图 52x69，物理上是 69x52（仍是 4:3 横构图），一行 3 个刚好塞进 240x320。 */
 #define GRID_WIDE   (ui_scr_w() >= ui_scr_h())
 #define GRID_COLS   (GRID_WIDE ? 4 : 2)
 #define GRID_ROWS   (GRID_WIDE ? 2 : 3)
 #define GRID_PAGE   (GRID_COLS * GRID_ROWS)
-#define CELL_W      (GRID_WIDE ? 76 : 96)
-#define CELL_H      (GRID_WIDE ? 66 : 71)
-#define THUMB_W     (GRID_WIDE ? 72 : 92)     /*!< 均为 4:3，与源图同比 */
+#define CELL_W      (GRID_WIDE ? 76 : 54)
+#define CELL_H      (GRID_WIDE ? 66 : 73)
+#define THUMB_W     (GRID_WIDE ? 72 : 52)     /*!< 竖屏取的是「旋转后」的宽高 */
 #define THUMB_H     (GRID_WIDE ? 54 : 69)
 #define GRID_H      (GRID_ROWS * CELL_H + (GRID_ROWS - 1) * 4 + 4)
+#define GRID_Y      (ROLLER_Y)
 #define GRID_Y      (ROLLER_Y)
 
 /*! 静态对象数组按最大页容量分配。
@@ -106,6 +109,43 @@ static void fs_free(void)
         free(s_data);
         s_data = NULL;
     }
+}
+
+/*! 把 320x240 的 RGB565 原图顺时针转 90° 成 240x320。
+ *
+ *  竖屏时用它抵消屏幕 rotation=270 的画面旋转，让照片在物理屏上的方向
+ *  和横屏一致。代价是每张多一次 153KB 的搬运（几毫秒），换来显示和滑动
+ *  时零图层开销 —— 比用 lv_image_set_rotation 每帧变换一张 153KB 图层
+ *  划算得多（后者在左右滑动切图时会明显卡）。
+ *
+ *  失败返回 NULL，调用方保留原图按原方向显示，总比黑屏强。 */
+static uint8_t *photo_rot90(const uint8_t *src)
+{
+    const size_t bytes = (size_t)SRV_PHOTO_W * SRV_PHOTO_H * 2;
+    uint8_t *dst = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (dst == NULL) {
+        dst = malloc(bytes);
+    }
+    if (dst == NULL) {
+        return NULL;
+    }
+
+    const int W = SRV_PHOTO_W;   /* 320 */
+    const int H = SRV_PHOTO_H;   /* 240 */
+
+    for (int sy = 0; sy < H; sy++) {
+        const uint8_t *row = src + (size_t)sy * W * 2;
+        for (int sx = 0; sx < W; sx++) {
+            /* 顺时针 90°：(sx,sy) → (H-1-sy, sx)，新图宽 = H */
+            const int dx = H - 1 - sy;
+            const int dy = sx;
+            uint8_t *p = dst + ((size_t)dy * H + dx) * 2;
+            const uint8_t *s = row + sx * 2;
+            p[0] = s[0];
+            p[1] = s[1];
+        }
+    }
+    return dst;
 }
 
 /* ===================== 下一张预读 =====================
@@ -207,6 +247,21 @@ static bool fs_show(int idx)
         return false;
     }
 
+    /* 竖屏：先把照片顺时针转 90° 抵消屏幕旋转，方向才和横屏一致。
+     * 预旋转放在这里而不是显示时用 lv_image_set_rotation：后者会让每次重绘
+     * 都变换一张 153KB 的图层，左右滑动切图直接卡住。 */
+    bool rotated = false;
+    if (!GRID_WIDE) {
+        uint8_t *rot = photo_rot90(data);
+        if (rot != NULL) {
+            free(data);
+            data  = rot;
+            rotated = true;
+        } else {
+            ESP_LOGW(TAG, "旋转照片失败，按原方向显示");
+        }
+    }
+
     fs_free();
     s_data = data;
     s_idx  = idx;
@@ -214,13 +269,13 @@ static bool fs_show(int idx)
     memset(&s_dsc, 0, sizeof(s_dsc));
     s_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
     s_dsc.header.cf     = LV_COLOR_FORMAT_RGB565;
-    s_dsc.header.w      = SRV_PHOTO_W;
-    s_dsc.header.h      = SRV_PHOTO_H;
-    s_dsc.header.stride = SRV_PHOTO_W * 2;      /* RGB565：每像素 2 字节 */
+    /* 转过的照片宽高互换（240x320），正好铺满竖屏逻辑画面 */
+    s_dsc.header.w      = rotated ? SRV_PHOTO_H : SRV_PHOTO_W;
+    s_dsc.header.h      = rotated ? SRV_PHOTO_W : SRV_PHOTO_H;
+    s_dsc.header.stride = s_dsc.header.w * 2;    /* RGB565：每像素 2 字节 */
     s_dsc.data_size     = (uint32_t)bytes;
     s_dsc.data          = data;
 
-    /* 转换脚本已把图缩到 320x240 并居中留黑边，这里 1:1 贴上去即可 */
     lv_image_set_src(s_img, &s_dsc);
 
     const srv_photo_t *p = NULL;
@@ -362,28 +417,27 @@ static void grid_free(void)
 }
 
 /* 最近邻采样：原图 320x240 → 缩略图。
- * 缩略图宽高比固定取 4:3（横屏 72x54、竖屏 92x69），和源图完全同比，
- * 所以下面的 crop_w/crop_h 恒等于原图尺寸，走「整图缩放、不裁剪」那条路；
- * 保留这段比例计算是为了将来改格子尺寸时仍按比例裁缺而不是把照片压扁。 */
+ *
+ * 横屏：直接缩到 72x54（同比，不裁）。
+ * 竖屏：先把原图顺时针转 90°（宽高互换成 240x320）再缩到 52x69，
+ *       用来抵消屏幕 rotation=270 的画面旋转（90+270=360），这样物理屏上
+ *       看到的照片方向和横屏完全一致。
+ * 旋转映射 (sx,sy) → (H-1-sy, sx)，反推：sx = v、sy = H-1-u。 */
 static void thumb_make(const uint8_t *src, uint8_t *dst)
 {
-    int crop_w = SRV_PHOTO_W;
-    int crop_h = SRV_PHOTO_H;
-
-    if ((long)THUMB_W * SRV_PHOTO_H > (long)THUMB_H * SRV_PHOTO_W) {
-        crop_h = (int)((long)SRV_PHOTO_W * THUMB_H / THUMB_W);
-    } else {
-        crop_w = (int)((long)SRV_PHOTO_H * THUMB_W / THUMB_H);
-    }
-    const int off_x = (SRV_PHOTO_W - crop_w) / 2;
-    const int off_y = (SRV_PHOTO_H - crop_h) / 2;
-
     for (int y = 0; y < THUMB_H; y++) {
-        const int sy = off_y + y * crop_h / THUMB_H;
-        const uint8_t *row = src + (size_t)sy * SRV_PHOTO_W * 2;
         for (int x = 0; x < THUMB_W; x++) {
-            const int sx = off_x + x * crop_w / THUMB_W;
-            const uint8_t *p = row + sx * 2;
+            int sx, sy;
+            if (GRID_WIDE) {
+                sx = x * SRV_PHOTO_W / THUMB_W;
+                sy = y * SRV_PHOTO_H / THUMB_H;
+            } else {
+                const int u = x * SRV_PHOTO_H / THUMB_W;   /* 旋转后图的列 0..239 */
+                const int v = y * SRV_PHOTO_W / THUMB_H;   /* 旋转后图的行 0..319 */
+                sx = v;
+                sy = SRV_PHOTO_H - 1 - u;
+            }
+            const uint8_t *p = src + ((size_t)sy * SRV_PHOTO_W + sx) * 2;
             *dst++ = p[0];
             *dst++ = p[1];
         }
@@ -798,13 +852,11 @@ void ui_photos_create(lv_obj_t *root)
     lv_obj_add_event_cb(s_fs, fs_released_cb, LV_EVENT_RELEASED, NULL);
 
     s_img = lv_image_create(s_fs);
-    /* 照片固定 320x240；竖屏时等比缩小到屏幕内，横屏保持 1:1 铺满 */
-    {
-        int32_t sx = ((int32_t)ui_scr_w() * 256) / SRV_PHOTO_W;
-        int32_t sy = ((int32_t)ui_scr_h() * 256) / SRV_PHOTO_H;
-        lv_image_set_scale(s_img, (uint32_t)((sx < sy) ? sx : sy));
-    }
-    lv_obj_center(s_img);                             /* 横屏 320x240 正好铺满 */
+    /* 两个方向都是 1:1 铺满：横屏是 320x240 贴 320x240；
+     * 竖屏的图在 fs_show() 里已经预旋转成 240x320，同样严丝合缝。
+     * 所以这里不再按分辨率算缩放。 */
+    lv_image_set_scale(s_img, 256);
+    lv_obj_center(s_img);
 
     /* 底部文件名 + 序号：叠在图上，加半透明底免得白底照片上看不清 */
     s_fs_name = lv_label_create(s_fs);
