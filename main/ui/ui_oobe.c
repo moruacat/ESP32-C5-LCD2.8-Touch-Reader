@@ -30,6 +30,17 @@ static const char *TAG = "ui_oobe";
 /*! 结尾整体淡出时长 */
 #define OOBE_FADE_MS      220
 
+/*! 首帧画完到动画真正开始之间的停顿。
+ *
+ *  切屏之后这一屏还没有被真正画出来：320x240 在 40MHz SPI 上要分 5 次 flush、
+ *  约 31ms，开机时还会和别的初始化抢 CPU。而前面几个方块的上浮只有 98/145/190ms，
+ *  如果动画从 0ms 就起跑，它们的上浮会整段落在首帧之前 —— 观众看到的第一帧
+ *  它们已经在终点上，看起来就是「瞬移」。
+ *
+ *  所以在 ui_oobe_play() 里先 lv_refr_now() 强制把黑屏画出来，再留这一段
+ *  让人眼落定，然后动画才起跑。整条时间轴统一平移这么多，节奏本身不变。 */
+#define OOBE_START_DELAY_MS 120
+
 /*! 方块上浮距离：原版 50px 配 400px 高的窗口，这里 44px 配 240px */
 #define OOBE_RISE_PX      44
 
@@ -284,7 +295,7 @@ static void oobe_timing_build(void)
         const float d = sinf(((float)(i + 2) / (float)(OOBE_N + 2)) * (OOBE_PI / 2.0f))
                         * (float)OOBE_DURATION_MS / (float)OOBE_N;
 
-        s_tm[i].rise_at = (uint32_t)(acc + 0.5f);
+        s_tm[i].rise_at = (uint32_t)(acc + 0.5f) + OOBE_START_DELAY_MS;
         s_tm[i].rise_ms = (uint32_t)(d * 9.0f + 0.5f);
         s_tm[i].flip_ms = s_tm[i].rise_ms / 2;
         s_tm[i].flip_at = s_tm[i].rise_at + s_tm[i].rise_ms + OOBE_HOLD_MS;
@@ -614,9 +625,14 @@ void ui_oobe_play(void)
         xn += s_items[i].w_nat;
     }
 
-    /* 切到 OOBE 这一屏。此刻 22 个元素都还是「方块 opa=0 / 字母 scale=0」，
+    /* 切到 OOBE 这一屏。此刻 22 个元素都还是「方块 opa=0 / 字母 HIDDEN」，
      * 所以观众看到的是纯黑，不会闪出半成品。 */
     lv_screen_load(s_screen);
+
+    /* 先把这一屏真正画出来再启动动画。否则前几个方块那 98/145/190ms 的上浮
+     * 会整段落在首帧之前，第一帧看到的就是它们已经浮到位 —— 也就是「瞬移」。
+     * 同步刷新，320x240 大约 31ms，只在开头付一次。 */
+    lv_refr_now(lv_display_get_default());
 
     s_start_tick = lv_tick_get();
     s_playing = true;
