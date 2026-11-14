@@ -35,3 +35,9 @@ tools/t.txt
 ./.dumate/
 ./.trae/
 ./.screenshots/
+
+# --- 服务端（Go）---
+server/.gopath/
+server/.gocache/
+server/clockreader-server*
+server/data/
