@@ -74,7 +74,9 @@ static void parse_url(const char *raw, char *host, size_t host_len, int *port)
             *port = atoi(colon + 1);
         }
     } else if (hp[0] != '\0') {
-        snprintf(host, host_len, "%s", hp);
+        /* 用精度限制长度：hp 最长可到 95 字节，直接 %s 会被 -Werror
+         * 的 format-truncation 拦下（目标 host 只有 48）。 */
+        snprintf(host, host_len, "%.*s", (int)(host_len - 1), hp);
     }
 }
 

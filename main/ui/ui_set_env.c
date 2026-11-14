@@ -18,7 +18,7 @@
 
 #include <stdio.h>
 
-static const char *TAG = "ui_env";
+/* 这个页面不打日志，没有 TAG */
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_temp_lb;

@@ -17,8 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *TAG = "ui_online";
-
+/* 这个页面不打日志，没有 TAG */
 static lv_obj_t *s_root;
 static lv_obj_t *s_addr_lb;
 static lv_obj_t *s_hint_lb;
@@ -44,27 +43,6 @@ static void refresh_addr_locked(void)
 }
 
 /* ===================== 发现 ===================== */
-
-static void discover_task(void *arg)
-{
-    (void)arg;
-
-    esp_err_t err = srv_server_discover(3000);
-
-    if (bsp_display_lock(1000) == ESP_OK) {
-        if (s_root != NULL) {
-            refresh_addr_locked();
-            lv_label_set_text(s_hint_lb,
-                              err == ESP_OK ? "已发现服务端" :
-                              err == ESP_ERR_TIMEOUT ? "没找到服务端（同网段？服务端在跑？）" :
-                              "发现失败");
-            lv_obj_set_style_text_color(s_hint_lb,
-                                        err == ESP_OK ? UI_COLOR_OK : UI_COLOR_TEMP, 0);
-        }
-        bsp_display_unlock();
-    }
-    vTaskDelete(NULL);
-}
 
 static void on_discover(lv_event_t *e)
 {
