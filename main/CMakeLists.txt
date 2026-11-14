@@ -55,6 +55,7 @@ idf_component_register(
         "services/srv_config.c"
         "services/srv_wifi.c"
         "services/srv_ntp.c"
+        "services/srv_server.c"
         "services/srv_hist.c"
         "services/srv_audio.c"
         "services/srv_alarm.c"

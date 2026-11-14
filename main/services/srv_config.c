@@ -128,6 +128,9 @@ static const cfg_field_t s_fields[] = {
 
     /* 照片：6 位数字密码，空串表示未设置（此时进照片不校验） */
     STR(CFG_PHOTO_PASS,      photo_pass,       ""),
+
+    /* 在线书库：服务端地址，空 = 未配置（开机靠 UDP 发现填入） */
+    STR(CFG_SERVER_URL,      server_url,       ""),
 };
 
 #define FIELD_COUNT (sizeof(s_fields) / sizeof(s_fields[0]))
@@ -381,6 +384,21 @@ int32_t srv_config_get_int(const char *key, int32_t def_val)
         return def_val;
     }
     return *as_i32(f);
+}
+
+esp_err_t srv_config_get_str(const char *key, char *out, size_t out_len)
+{
+    if (out == NULL || out_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    out[0] = '\0';
+
+    const cfg_field_t *f = find_field(key);
+    if (f == NULL || f->type != CFG_STR) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    snprintf(out, out_len, "%s", as_str(f));
+    return ESP_OK;
 }
 
 /* ===================== 落盘 ===================== */

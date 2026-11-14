@@ -17,6 +17,7 @@ extern "C" {
 /*! 照片密码：固定 6 位数字，缓冲多留一位结束符 */
 #define SRV_CONFIG_PHOTO_PASS_LEN   7
 #define SRV_CONFIG_PHOTO_PASS_DIGITS 6
+#define SRV_CONFIG_URL_LEN      96                      /*!< 在线书库地址（http://ip:port） */
 
 /* ===================== 配置结构 ===================== */
 /**
@@ -80,6 +81,9 @@ typedef struct {
 
     /* 照片 */
     char    photo_pass[SRV_CONFIG_PHOTO_PASS_LEN];      /*!< 照片密码（6 位数字，空串 = 未设置） */
+
+    /* 在线书库 */
+    char    server_url[SRV_CONFIG_URL_LEN];             /*!< 服务端地址，空 = 未配置（UDP 发现填入） */
 } srv_config_t;
 
 /* ===================== 字段键名（供 UI / 调试使用） ===================== */
@@ -93,6 +97,8 @@ typedef struct {
 #define CFG_FAST_HOME       "fast_home"
 #define CFG_BAT_CAL_K       "bat_cal_k"
 #define CFG_SAFE_MODE       "safe_mode"
+/* 在线书库服务端地址（http://ip:port；空串表示没配置，靠 UDP 发现） */
+#define CFG_SERVER_URL      "server_url"
 #define CFG_WIFI_EN         "wifi_en"
 #define CFG_WIFI_SSID       "wifi_ssid"
 #define CFG_WIFI_PASS       "wifi_pass"
@@ -199,6 +205,14 @@ esp_err_t srv_config_set_str(const char *key, const char *value, bool save);
  * @return 键不存在时返回 def_val
  */
 int32_t srv_config_get_int(const char *key, int32_t def_val);
+
+/**
+ * @brief 按键名读取字符串项
+ * @param out     输出缓冲
+ * @param out_len 缓冲大小（含结束符）
+ * @return ESP_OK / ESP_ERR_NOT_FOUND（键不存在）/ ESP_ERR_INVALID_ARG
+ */
+esp_err_t srv_config_get_str(const char *key, char *out, size_t out_len);
 
 /* ===================== 落盘 ===================== */
 /**

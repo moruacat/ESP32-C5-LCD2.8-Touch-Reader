@@ -16,6 +16,7 @@
 #include "srv_input.h"
 #include "srv_wifi.h"
 #include "srv_ntp.h"
+#include "srv_server.h"
 #include "srv_hist.h"
 #include "srv_audio.h"
 #include "srv_alarm.h"
@@ -153,6 +154,9 @@ void app_init_all(void)
     /* 5.7 网络与校时（只初始化，是否开启射频由配置决定） */
     srv_wifi_init();
     srv_ntp_init();
+
+    /* 5.7.1 在线书库服务端地址（存 config.dat，空 = 未配置，靠 UDP 发现） */
+    srv_server_init();
 
     /* 6. 显示 + LVGL（内部创建 LVGL 任务） */
     if (bsp_display_start() == NULL) {
