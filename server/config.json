@@ -1,6 +1,0 @@
-{
-  "http_addr": ":8080",
-  "udp_port": 9527,
-  "name": "ClockReader 书房",
-  "data_dir": "./data"
-}

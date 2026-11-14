@@ -41,3 +41,4 @@ server/.gopath/
 server/.gocache/
 server/clockreader-server*
 server/data/
+server/config.json
