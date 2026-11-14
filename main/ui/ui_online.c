@@ -1,6 +1,7 @@
 #include "ui_online.h"
 #include "ui_common.h"
 #include "ui_icons.h"
+#include "ui_dialog.h"
 #include "app_navigator.h"
 
 #include "srv_catalog.h"
@@ -12,12 +13,21 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 static const char *TAG = "ui_online";
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_addr_lb;
 static lv_obj_t *s_hint_lb;
 static lv_obj_t *s_list;
+
+/* 书单缓存：点击行要拿到对应的书，页面销毁时释放 */
+static srv_catalog_book_t *s_books;
+static int                 s_book_count;
+static volatile bool       s_downloading;
 
 /* ===================== 刷新 ===================== */
 
@@ -73,17 +83,110 @@ static void on_discover(lv_event_t *e)
     }
 }
 
-/* ===================== 书单 ===================== */
+/* ===================== 下载 ===================== */
 
-static void add_book_row(const srv_catalog_book_t *b)
+static void dl_progress(int done, int total)
 {
-    lv_obj_t *row = ui_row_create(s_list, (lv_coord_t)(lv_obj_get_child_count(s_list) * 44),
+    if (bsp_display_lock(200) != ESP_OK) {
+        return;
+    }
+    if (s_root != NULL && s_hint_lb != NULL) {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "下载中 %d / %d 章", done, total);
+        lv_label_set_text(s_hint_lb, msg);
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_PRIMARY, 0);
+    }
+    bsp_display_unlock();
+}
+
+typedef struct {
+    int idx;   /* s_books 下标 */
+} dl_arg_t;
+
+static void dl_task(void *arg)
+{
+    const int idx = ((dl_arg_t *)arg)->idx;
+    free(arg);
+
+    srv_catalog_book_t *b = &s_books[idx];
+    esp_err_t err = srv_catalog_download(b, dl_progress);
+
+    if (bsp_display_lock(1000) == ESP_OK) {
+        if (s_root != NULL && s_hint_lb != NULL) {
+            if (err == ESP_OK) {
+                lv_label_set_text(s_hint_lb, "下载完成，可在书架里打开");
+                lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_OK, 0);
+            } else {
+                lv_label_set_text(s_hint_lb,
+                                  err == ESP_ERR_INVALID_STATE ? "SD 未挂载或服务端未配置"
+                                                               : "下载失败（服务端没开？SD 满了？）");
+                lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEMP, 0);
+            }
+        }
+        bsp_display_unlock();
+    }
+
+    s_downloading = false;
+    vTaskDelete(NULL);
+}
+
+/* 确认框点了「下载」之后真正起任务 */
+static void on_dl_confirm(void *arg)
+{
+    const int idx = (int)(intptr_t)arg;
+    if (idx < 0 || idx >= s_book_count || s_books == NULL || s_downloading) {
+        return;
+    }
+
+    dl_arg_t *a = malloc(sizeof(*a));
+    if (a == NULL) {
+        return;
+    }
+    a->idx = idx;
+
+    s_downloading = true;
+    lv_label_set_text(s_hint_lb, "准备下载 ...");
+    lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_PRIMARY, 0);
+
+    if (xTaskCreate(dl_task, "ui_dl", 8192, a, 3, NULL) != pdPASS) {
+        free(a);
+        s_downloading = false;
+        lv_label_set_text(s_hint_lb, "下载任务创建失败");
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEMP, 0);
+    }
+}
+
+static void on_book_clicked(lv_event_t *e)
+{
+    const int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= s_book_count || s_books == NULL) {
+        return;
+    }
+    if (s_downloading) {
+        lv_label_set_text(s_hint_lb, "已有下载在进行");
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEMP, 0);
+        return;
+    }
+
+    const srv_catalog_book_t *b = &s_books[idx];
+    char note[96];
+    snprintf(note, sizeof(note), "《%.40s》%d 章，确认下载到 SD？", b->title, b->chapters);
+    ui_dialog_confirm("下载这本书？", note, "下载", on_dl_confirm, (void *)(intptr_t)idx);
+}
+
+static void add_book_row(int idx)
+{
+    const srv_catalog_book_t *b = &s_books[idx];
+
+    lv_obj_t *row = ui_row_create(s_list,
+                                  (lv_coord_t)(lv_obj_get_child_count(s_list) * 44),
                                   &ic_book_open, b->title);
     if (row == NULL) {
         return;
     }
+    ui_add_click_feedback(row);
+    lv_obj_add_event_cb(row, on_book_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
 
-    /* 右侧：章数 + 大小（太小放不下就只显示章数） */
     char info[32];
     snprintf(info, sizeof(info), "%d 章", b->chapters);
     lv_obj_t *val = ui_row_value_create(row, -12, 90);
@@ -101,6 +204,11 @@ static void fetch_task(void *arg)
 
     if (bsp_display_lock(1000) == ESP_OK) {
         if (s_root != NULL) {
+            /* 换一页新书单：旧缓存先释放 */
+            srv_catalog_free(s_books);
+            s_books = NULL;
+            s_book_count = 0;
+
             lv_obj_clean(s_list);
 
             if (err == ESP_ERR_INVALID_STATE) {
@@ -113,11 +221,15 @@ static void fetch_task(void *arg)
                 lv_label_set_text(s_hint_lb, "服务端书库是空的");
                 lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEXT_DIM, 0);
             } else {
+                s_books = list;          /* 所有权转移给页面 */
+                s_book_count = count;
+                list = NULL;             /* 防止下面被 free */
+
                 for (int i = 0; i < count; i++) {
-                    add_book_row(&list[i]);
+                    add_book_row(i);
                 }
-                char msg[48];
-                snprintf(msg, sizeof(msg), "共 %d 本（下载功能开发中）", count);
+                char msg[64];
+                snprintf(msg, sizeof(msg), "共 %d 本，点书名下载", count);
                 lv_label_set_text(s_hint_lb, msg);
                 lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_OK, 0);
             }
@@ -156,6 +268,15 @@ static void online_root_del_cb(lv_event_t *e)
     if (lv_event_get_target(e) != s_root) {
         return;
     }
+    /* 书单缓存在页面销毁时释放；下载任务若还在跑，会看到 s_root == NULL
+     * 而跳过 UI 更新，但 s_books 可能是它正在读的——所以等它结束再放。
+     * 简化处理：下载中不释放（内存很小，下次进页面会重新拉）。 */
+    if (!s_downloading) {
+        srv_catalog_free(s_books);
+        s_books = NULL;
+        s_book_count = 0;
+    }
+
     s_root     = NULL;
     s_addr_lb  = NULL;
     s_hint_lb  = NULL;
