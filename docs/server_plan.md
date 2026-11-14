@@ -14,7 +14,8 @@
 | 传输协议 | **纯 HTTP** | 按需求；局域网内无需 TLS |
 | 书库分发格式 | **章节级 HTTP API** | 设备零解压、可断点续传，最省内存 |
 | 服务器发现 | **UDP 广播 + 手动 IP 兜底** | 设备端 ~2 KB 成本；mDNS 已移除且更重 |
-| 番茄下载 | **子进程调用 fanqie-dl**（必要时 fork 加参数） | 它是 Rust 交互式 CLI，无 HTTP API |
+| 番茄下载 | **`guohuiyuan/go-novel-dl`（Go，原生支持番茄）** | Go 项目，CLI/Web/EPUB 导出齐全，子进程或 fork 都行 |
+| 正文排版 | **段首缩进 2 全角空格 + 段间空行** | 对齐用户提供的样本 EPUB 视觉风格 |
 
 ---
 
@@ -162,6 +163,37 @@ CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -trimpath -ldflags="-s -w" -o clock
 
 **验收方式**：拿现有 `tools/epub2ebf` 的 Python 输出做**逐字节比对**（同一本 EPUB 转换后 `diff -r`），确保固件解析行为完全一致。
 
+### 3.3 排版规范（用户指定：对齐样本 EPUB）
+
+样本：`不错！猫猫我就是隐藏BOSS.epub`（其他工具生成，用户认可其观感）。它的样子是：
+
+```html
+<h1>第1章 我变成了……谁？</h1>
+<p>【前方即将进入另一个世界……】</p>
+<p>【放只噬元兽在这吃脑子……】</p>
+```
+
+```css
+p { text-indent: 2em; margin: 0 0 .8em 0; line-height: 1.5; }
+```
+
+即：**段首缩进 2 字符 + 段间距 0.8em（视觉空行）**。EBF 是纯文本，要复刻这个观感必须落到字符上：
+
+| 特征 | EBF 里的写法 | 说明 |
+|---|---|---|
+| 段首缩进 | 每段开头加 **两个全角空格 `　　`** | 设备端阅读器不自动缩进（已确认），只能靠文本 |
+| 段间空行 | 段间插一个空行（`\n\n`），即现有 `clean_text(blank_line=True)` | 小屏上对应 CSS 的 `margin:.8em` |
+| 章节标题 | 章名单独一行，正文**不重复**标题 | 复用现有 `drop_dup_title()` 逻辑 |
+| 简介页 | `aux_*.xhtml` 里含「书名：/作者：/简介：」的 → 提取成 `<intro>` | **不要**当章节 |
+| 目录页 | `table-of-contents.html` / `toc.ncx` / `nav` → 跳过 | 否则会多出一章「目录」 |
+| 图片 | 跳过（EBF 无图片位，样本里也只有段评配图） | 保持纯文本 |
+
+**现有 `tools/epub2ebf/epub2ebf.py` 与目标的差距**（需要在新实现里补）：
+
+1. `blank_line` 默认 `False`——样本风格应为 `True`；
+2. 不生成段首缩进；
+3. 按 spine 切章时会把简介页、目录页也当成章（样本的 `spine` 里就在 `chapter_00001` 之前有 `aux_00000` 和 `table-of-contents.html`），需要用文件名/内容规则筛掉。
+
 ---
 
 ## 4. 覆盖更新（追更）
@@ -200,40 +232,49 @@ GET /api/books/{id}/chapter/1201
 
 ---
 
-## 5. 番茄下载集成
+## 5. 番茄下载集成（`guohuiyuan/go-novel-dl`）
 
-### 5.1 现实约束
+### 5.1 为什么不用 fanqie-dl
 
-`linzj/fanqie-dl` 是**纯 Rust 的交互式命令行**：运行后从 stdin 读 `book_id`（或书名/URL），下载 TXT 到 `downloads/<书名>/`。**没有 HTTP API，也没有非交互参数。**
+`linzj/fanqie-dl` 是**纯 Rust 的交互式 CLI**：运行后从 stdin 读 `book_id`，只输出 TXT 到 `downloads/<书名>/`，
+**没有 HTTP API、没有非交互参数**——自动追更时无法可靠判断"完成"或"新增了哪几章"。
 
-### 5.2 两条路径
+`guohuiyuan/go-novel-dl` 则完全对得上需求：
 
-**路径 A（先做，成本低）：子进程 + 交互模拟**
+| 能力 | 说明 |
+|---|---|
+| **Go 实现** | 与本服务端同语言，必要时可以直接 fork 改 |
+| **原生支持番茄** | 搜索走官方免签名端点 `novel.snssdk.com`，目录/正文走 `fanqienovel.com` |
+| **CLI** | `novel-dl download <book_id> --site fanqie`、`export <book_id>` |
+| **章节范围** | `--start / --end`，追更时只抓新增章 |
+| **Web / API** | 自带管理界面（默认 18089） |
+| **导出** | txt / html / epub |
+| **部署** | Docker 镜像（NAS 上有现成教程） |
 
-- 服务端 `os/exec` 启动 `fanqie-dl`；
-- 向 stdin 写入 `book_id\n`，读 stdout 判断进度；
-- 轮询 `downloads/<书名>/` 出现完成标记 → 解析 TXT（按章节标题切分）→ 转 EBF；
-- **风险**：交互提示可能变化、无法可靠判断"完成"。
+### 5.2 集成方式（三选一）
 
-**路径 B（A 不稳时）：fork 加 CLI 参数**
+| 方式 | 做法 | 优点 | 缺点 |
+|---|---|---|---|
+| **A. 子进程 CLI**（先做这个） | `os/exec` 调 `novel-dl download <id> --site fanqie` + `export` | 零耦合、随它升级 | 只能靠输出目录判断结果 |
+| **B. 调它的 Web API** | 本地起 `novel-dl web --port 18089`，服务端 HTTP 调 | 有结构化进度 | 依赖它内部 API 稳定性 |
+| **C. fork 引入 Go 包** | 直接 import 它的下载器包 | 最干净 | 要维护 fork |
 
-- 给 fanqie-dl 加 `--book-id`、`--out`、`--json-progress`；
-- Rust 小改（argparse + 非交互分支），交叉编译 `i686-unknown-linux-gnu`；
-- 服务端直接拿到结构化进度，最可靠。
-
-**路径 C（备选）：换 Python 版 `ying-ck/fanqienovel-downloader`**
-
-- 支持 `--book-id`、输出 EPUB、有 `save_mode`；
-- i386 Linux 装 Python 3 即可；
-- 但与你指定的 fanqie-dl 不同，作为降级方案记录。
+**先做 A**：追更时用 `--start <本地已有章数+1>` 只抓新增章；成功与否看导出文件是否生成。
+如果 A 的进度判断不够用，再评估 B/C。
 
 ### 5.3 追更定时任务
 
 - 服务端 Go ticker（默认每 6 小时，可配）；
 - 遍历 `books WHERE fanqie_id IS NOT NULL AND auto_update=1`；
-- 拉章节列表 → 对比 `chapters` 表 → 有新章才下载；
+- 调 `novel-dl export <id>` 或 `download --start N --end 99999` 拿新章；
+- 解析导出的 TXT/EPUB → 走第 4 节的哈希合并 → 重转 EBF；
 - 每本之间随机延迟 10–30 秒，避免触发番茄限流；
 - 结果写 `jobs` 表，Web 上可见进度与失败原因。
+
+### 5.4 版式一致性
+
+go-novel-dl 导出的 TXT 自带章节标题和段落。转换前统一按第 3.3 节的排版规范处理
+（**段首缩进 2 全角空格 + 段间空行**），保证「上传的 EPUB」和「追更来的内容」在设备上观感一致。
 
 ---
 
@@ -297,10 +338,11 @@ GET  /api/books/{id}/chapter/N  → 单章正文（chapter.N.ebfl）
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| **fanqie-dl 是交互式 CLI** | 自动追更不可靠 | 先模拟 stdin；不行就 fork 加参数 |
+| **go-novel-dl 的 CLI/导出行为变化** | 追更解析失败 | 优先用 `--start/--end` 增量；必要时固定版本或 fork |
 | 番茄 API 变更/限流 | 下载失败 | 延迟 + 重试 + Web 报错；保留手动上传兜底 |
 | i386 交叉编译 | SQLite 需要 CGO | 用纯 Go 驱动，`CGO_ENABLED=0` |
 | EPUB 章节重排/删章 | 覆盖更新错乱 | 哈希对比 + 用户确认「完整替换」 |
+| 简介/目录页被当成章节 | 书里多出「简介」「目录」两章 | 按文件名与「书名：/作者：」关键词筛掉 |
 | 设备 SD 写入慢（几 MB） | 下载耗时长 | 分章下载 + 进度 + 断点续传 |
 | 下载与 AI 并发 | 内部 RAM 不足 | 下载前暂停 AI |
 | 服务端 IP 变化 | 设备连不上 | UDP 重新发现 + 设置页手动改 |
@@ -311,5 +353,6 @@ GET  /api/books/{id}/chapter/N  → 单章正文（chapter.N.ebfl）
 ## 9. 待确认
 
 1. **服务端部署位置**：局域网 NAS / 树莓派（UDP 广播可用），还是公网 VPS（需手填域名）？
-2. **番茄下载是否必须用 fanqie-dl**：若可接受 Python 版（参数化更好集成），阶段 C 能省 1–2 天。
-3. **在线书架入口**：放在书架页多一个标签，还是设置里单独一页？
+2. **在线书架入口**：放在书架页多一个标签，还是设置里单独一页？
+3. **正文排版**：段首缩进用「两个全角空格」还是「一个制表位」？（样本是 CSS 的 `text-indent:2em`，转成纯文本时这两种视觉最接近，前者更稳妥）
+4. **追更频率**：默认 6 小时一次是否合适？
