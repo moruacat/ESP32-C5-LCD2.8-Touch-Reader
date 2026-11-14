@@ -22,6 +22,7 @@ import (
 	"clockreader-server/api"
 	"clockreader-server/db"
 	"clockreader-server/discover"
+	"clockreader-server/importer"
 	"clockreader-server/web"
 )
 
@@ -58,7 +59,11 @@ func main() {
 	dev := &api.Handler{Store: store, EbfRoot: filepath.Join(cfg.DataDir, "books")}
 	dev.Register(mux)
 
-	webHandler := &web.Handler{Store: store}
+	imp := &importer.Importer{
+		Store:   store,
+		EbfRoot: filepath.Join(cfg.DataDir, "books"),
+	}
+	webHandler := &web.Handler{Store: store, Importer: imp.Import}
 	webHandler.Register(mux, cfg.HTTPAddr)
 
 	srv := &http.Server{

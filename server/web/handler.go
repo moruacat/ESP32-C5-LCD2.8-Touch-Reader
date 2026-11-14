@@ -4,6 +4,7 @@ package web
 import (
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 
@@ -120,7 +121,7 @@ func (h *Handler) Register(mux *http.ServeMux, addr string) {
 	mux.HandleFunc("/upload", h.upload)
 }
 
-// upload 接收 EPUB；转换器未接入时明确拒绝。
+// upload 接收 EPUB 并交给 Importer 转换入库。
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
@@ -130,5 +131,38 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "转换器尚未接入（阶段 B），上传暂不可用", http.StatusNotImplemented)
 		return
 	}
-	http.Error(w, "尚未实现", http.StatusNotImplemented)
+
+	// 200MB 上限：EPUB 一般只有几 MB，这个尺寸只用来挡住误传的大文件
+	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		http.Error(w, "解析上传失败（文件过大或不是 multipart）："+err.Error(),
+			http.StatusBadRequest)
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "没有收到 file 字段："+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "读取上传内容失败："+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	book, err := h.Importer(hdr.Filename, data)
+	if err != nil {
+		log.Printf("导入 %s 失败: %v", hdr.Filename, err)
+		http.Error(w, "导入失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("已导入 %q：%d 章，%d 字节", book.Title, book.Chapters, book.Bytes)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
