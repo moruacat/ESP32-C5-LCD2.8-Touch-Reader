@@ -387,6 +387,13 @@ static void on_search_clicked(lv_event_t *e)
     ui_ime_text_input_show("搜索书名", SRV_BOOK_NAME_MAX - 1, on_search_done, NULL);
 }
 
+/* 在线书库：同一 WiFi 下从自建服务端拉书 */
+static void on_online_clicked(lv_event_t *e)
+{
+    (void)e;
+    app_navigator_switch(PAGE_ONLINE, true);
+}
+
 void ui_bookshelf_create(lv_obj_t *root)
 {
     const lv_coord_t sw = ui_scr_w();
@@ -399,6 +406,8 @@ void ui_bookshelf_create(lv_obj_t *root)
     lv_obj_t *bar = ui_titlebar_create_plain(root, "书架", app_navigator_back_smart_cb, NULL);
     /* 旋转键由标题栏统一放在最右端，搜索键放在它左边 */
     ui_titlebar_button_create(bar, "搜索", -32, 40, on_search_clicked, NULL);
+    /* 在线书库：返回键右侧，与搜索键同样式（搜索键在右端靠旋转键） */
+    ui_titlebar_left_button_create(bar, "在线", 32, 40, on_online_clicked, NULL);
 
     /* 每次进书架都重扫：最近阅读排序开关可能刚改过 */
     (void)srv_library_scan();

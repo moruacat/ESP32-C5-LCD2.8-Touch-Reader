@@ -22,6 +22,7 @@
 #include "ui_calendar.h"
 #include "ui_safe_menu.h"
 #include "ui_bookshelf.h"
+#include "ui_online.h"
 #include "ui_reader.h"
 #include "ui_music.h"
 #include "ui_games.h"
@@ -77,6 +78,7 @@ static const app_page_ops_t s_page_ops[PAGE_MAX] = {
     [PAGE_AI]        = {.build = ui_ai_create},
     [PAGE_CALCULATOR] = {.build = ui_calculator_create},
     [PAGE_BOOKSHELF] = {.build = ui_bookshelf_create},
+    [PAGE_ONLINE]    = {.build = ui_online_create},
     [PAGE_READER]    = {.build = ui_reader_create},
     [PAGE_MUSIC]     = {.build = ui_music_create},
     [PAGE_GAMES]     = {.build = ui_games_create},

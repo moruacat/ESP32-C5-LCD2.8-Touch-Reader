@@ -32,6 +32,7 @@ typedef enum {
     PAGE_TIMER,         /*!< 计时器 */
     PAGE_COUNTDOWN,     /*!< 倒计时 */
     PAGE_BOOKSHELF,     /*!< 书架 */
+    PAGE_ONLINE,        /*!< 在线书库（书架标题栏「在线」进入） */
     PAGE_READER,        /*!< 阅读器 */
     PAGE_MUSIC,         /*!< 音乐 */
     PAGE_GAMES,         /*!< 游戏列表 */

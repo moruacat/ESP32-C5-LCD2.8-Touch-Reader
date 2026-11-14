@@ -12,3 +12,6 @@ dependencies:
   # esp_xiaozhi 的公共头里引用了 esp_mcp_engine.h，而它是组件的 PRIV_REQUIRES，
   # 所以 main 必须自己声明一份，否则编译找不到头文件
   espressif/mcp-c-sdk: "^2.0.1"
+  # 在线书库：解析 /api/books 的 JSON（书单、进度）。
+  # IDF 5.x 起 cJSON 不再是内置组件，需要在这里声明。
+  espressif/cjson: "^1.7.18"
