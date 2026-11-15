@@ -141,14 +141,37 @@ static void batch_task(void *arg)
 {
     (void)arg;
 
+    /* 先整份拷走书单：下载期间用户可能点「刷新」，
+     * 那会把 s_books 释放并替换，直接遍历它会读到垃圾 book id。 */
+    const int count = s_book_count;
+    srv_catalog_book_t *snap = NULL;
+    if (count > 0 && s_books != NULL) {
+        snap = malloc(sizeof(*snap) * (size_t)count);
+        if (snap != NULL) {
+            memcpy(snap, s_books, sizeof(*snap) * (size_t)count);
+        }
+    }
+    if (snap == NULL) {
+        if (bsp_display_lock(1000) == ESP_OK) {
+            if (s_root != NULL) {
+                lv_label_set_text(s_hint_lb, "批量任务没有可下载的书");
+                lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEMP, 0);
+            }
+            bsp_display_unlock();
+        }
+        s_downloading = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
     int ok = 0;
     int fail = 0;
 
-    for (int i = 0; i < s_book_count; i++) {
-        if (srv_catalog_state(&s_books[i]) == SRV_CATALOG_UP_TO_DATE) {
+    for (int i = 0; i < count; i++) {
+        if (srv_catalog_state(&snap[i]) == SRV_CATALOG_UP_TO_DATE) {
             continue;               /* 已是最新的跳过，有更新的仍会下 */
         }
-        esp_err_t err = srv_catalog_download(&s_books[i], batch_progress);
+        esp_err_t err = srv_catalog_download(&snap[i], batch_progress);
         if (err == ESP_OK) {
             ok++;
         } else {
@@ -156,6 +179,8 @@ static void batch_task(void *arg)
         }
         s_batch_done++;
     }
+
+    free(snap);
 
     if (bsp_display_lock(1000) == ESP_OK) {
         if (s_root != NULL && s_hint_lb != NULL) {
@@ -248,16 +273,15 @@ static void dl_progress(int done, int total)
 }
 
 typedef struct {
-    int idx;   /* s_books 下标 */
+    int idx;                    /* s_books 下标（只用于提示） */
+    srv_catalog_book_t book;    /* 值拷贝：刷新会释放 s_books，不能持有指针 */
 } dl_arg_t;
 
 static void dl_task(void *arg)
 {
-    const int idx = ((dl_arg_t *)arg)->idx;
-    free(arg);
-
-    srv_catalog_book_t *b = &s_books[idx];
-    esp_err_t err = srv_catalog_download(b, dl_progress);
+    dl_arg_t *a = (dl_arg_t *)arg;
+    esp_err_t err = srv_catalog_download(&a->book, dl_progress);
+    free(a);
 
     if (bsp_display_lock(1000) == ESP_OK) {
         if (s_root != NULL && s_hint_lb != NULL) {
@@ -291,6 +315,7 @@ static void on_dl_confirm(void *arg)
         return;
     }
     a->idx = idx;
+    a->book = s_books[idx];   /* 值拷贝，之后刷新书单也不影响这次下载 */
 
     s_downloading = true;
     lv_label_set_text(s_hint_lb, "准备下载 ...");
