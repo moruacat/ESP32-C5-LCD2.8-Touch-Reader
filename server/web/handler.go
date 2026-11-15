@@ -343,14 +343,14 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
 
     <form method="post" action="/upload" enctype="multipart/form-data" id="drop-form">
       <label class="drop" id="drop-zone">
-        <input type="file" name="file" accept=".epub" required id="drop-file">
+        <input type="file" name="file" accept=".epub" required multiple id="drop-file">
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#4aa3d8"
              stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/>
           <path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16"/>
         </svg>
         <p>拖放 EPUB 文件到此处</p>
-        <small>或点击选择文件</small>
+        <small>可一次拖多个，或点击多选</small>
       </label>
       <p class="pick" id="drop-note">同名书会被覆盖更新</p>
       <button class="btn" type="submit" style="width:100%;margin-top:10px;height:38px">
@@ -429,22 +429,38 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
     zone.classList.remove('over');
     var files = e.dataTransfer && e.dataTransfer.files;
     if (!files || !files.length) return;
-    var file = files[0];
-    if (!/\.epub$/i.test(file.name)) {
-      setNote('只支持 .epub 文件：' + file.name, true);
+
+    var ok = [], bad = [];
+    for (var i = 0; i < files.length; i++) {
+      if (/\.epub$/i.test(files[i].name)) ok.push(files[i]);
+      else bad.push(files[i].name);
+    }
+    if (!ok.length) {
+      setNote('只支持 .epub 文件：' + bad.join('、'), true);
       return;
     }
+
     try {
       var dt = new DataTransfer();
-      dt.items.add(file);
+      for (var j = 0; j < ok.length; j++) dt.items.add(ok[j]);
       input.files = dt.files;
-    } catch (err) { input.files = files; }
-    setNote('上传中：' + file.name + ' …');
+    } catch (err) { input.files = ok; }
+
+    var names = [];
+    for (var k = 0; k < Math.min(ok.length, 3); k++) names.push(ok[k].name);
+    var msg = '上传 ' + ok.length + ' 个文件：' + names.join('、') + (ok.length > 3 ? ' 等' : '');
+    if (bad.length) msg += '（已忽略 ' + bad.length + ' 个非 EPUB）';
+    setNote(msg);
     if (form.requestSubmit) form.requestSubmit(); else form.submit();
   });
+
   input.addEventListener('change', function(){
-    if (input.files && input.files[0]) setNote('已选择：' + input.files[0].name);
-    else setNote(hint);
+    var n = input.files ? input.files.length : 0;
+    if (n === 0) { setNote(hint); return; }
+    if (n === 1) { setNote('已选择：' + input.files[0].name); return; }
+    var names = [];
+    for (var i = 0; i < Math.min(n, 3); i++) names.push(input.files[i].name);
+    setNote('已选择 ' + n + ' 个文件：' + names.join('、') + (n > 3 ? ' 等' : ''));
   });
   window.addEventListener('dragover', function(e){ e.preventDefault(); });
   window.addEventListener('drop', function(e){ e.preventDefault(); });
@@ -811,19 +827,20 @@ func (h *Handler) registerLogs(mux *http.ServeMux) {
 	})
 }
 
-// upload 接收 EPUB 并交给 Importer 转换入库。
+// upload 接收 EPUB（支持一次多个）并逐个转换入库。
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
 		return
 	}
 	if h.Importer == nil {
-		http.Error(w, "转换器尚未接入（阶段 B），上传暂不可用", http.StatusNotImplemented)
+		http.Error(w, "转换器尚未接入", http.StatusNotImplemented)
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
-	if err := r.ParseMultipartForm(16 << 20); err != nil {
+	// 500MB：批量上传时可能一次拖十几本
+	r.Body = http.MaxBytesReader(w, r.Body, 500<<20)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "解析上传失败（文件过大或不是 multipart）："+err.Error(),
 			http.StatusBadRequest)
 		return
@@ -832,26 +849,42 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		defer r.MultipartForm.RemoveAll()
 	}
 
-	file, hdr, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "没有收到 file 字段："+err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	data, err := io.ReadAll(file)
-	if err != nil {
-		http.Error(w, "读取上传内容失败："+err.Error(), http.StatusBadRequest)
+	// 同时兼容单文件字段和多文件字段
+	files := r.MultipartForm.File["file"]
+	if len(files) == 0 {
+		http.Error(w, "没有收到 file 字段", http.StatusBadRequest)
 		return
 	}
 
-	book, err := h.Importer(hdr.Filename, data)
-	if err != nil {
-		log.Printf("导入 %s 失败: %v", hdr.Filename, err)
-		http.Error(w, "导入失败："+err.Error(), http.StatusInternalServerError)
-		return
+	log.Printf("批量上传开始：%d 个文件", len(files))
+
+	ok, failed := 0, 0
+	for _, fh := range files {
+		file, err := fh.Open()
+		if err != nil {
+			log.Printf("打开 %s 失败: %v", fh.Filename, err)
+			failed++
+			continue
+		}
+		data, err := io.ReadAll(file)
+		file.Close()
+		if err != nil {
+			log.Printf("读取 %s 失败: %v", fh.Filename, err)
+			failed++
+			continue
+		}
+
+		book, err := h.Importer(fh.Filename, data)
+		if err != nil {
+			// 单本失败不影响其余文件
+			log.Printf("导入 %s 失败: %v", fh.Filename, err)
+			failed++
+			continue
+		}
+		ok++
+		log.Printf("已导入《%s》：%d 章（%d/%d）", book.Title, book.Chapters, ok+failed, len(files))
 	}
 
-	log.Printf("已导入 %q：%d 章，%d 字节", book.Title, book.Chapters, book.Bytes)
+	log.Printf("批量上传完成：成功 %d 个，失败 %d 个", ok, failed)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
