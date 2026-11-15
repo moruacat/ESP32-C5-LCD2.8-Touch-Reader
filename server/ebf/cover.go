@@ -17,6 +17,16 @@ const (
 	CoverMaxH = 320
 )
 
+// ConvertCover 把任意图片字节转成 EBF 封面（等比缩放到 ≤240x320 的 RGB565 小端）。
+// 给非 EPUB 来源（番茄封面）复用。
+func ConvertCover(raw []byte) (*Cover, bool) {
+	w, h, data, ok := convertCover(raw)
+	if !ok {
+		return nil, false
+	}
+	return &Cover{W: w, H: h, Data: data}, true
+}
+
 // convertCover 把图片字节等比缩放到不超过 240x320，转成 RGB565 小端。
 //
 // 只缩小不放大 —— 小图放大会糊，而且固件本来就按原始尺寸显示。

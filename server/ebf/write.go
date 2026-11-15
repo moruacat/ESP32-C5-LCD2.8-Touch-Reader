@@ -39,6 +39,71 @@ func WriteDir(outDir string, chapters []Chapter, title, author, intro string, co
 	return writeEBF(outDir, chapters, title, author, intro, cover)
 }
 
+// WriteChapterFile 单独写一章到 dir/chapter.N.ebfl（追更时只补新章用）。
+func WriteChapterFile(dir string, no int, c Chapter) error {
+	name := c.Title
+	if name == "" {
+		name = fmt.Sprintf("第 %d 章", no)
+	}
+
+	var head strings.Builder
+	head.WriteString("<chapter>\n")
+	head.WriteString("<title>" + xmlEscape(name) + "</title>\n")
+	if c.Volume != "" {
+		head.WriteString("<volume>" + xmlEscape(c.Volume) + "</volume>\n")
+	}
+	head.WriteString("</chapter>\n\n")
+
+	return os.WriteFile(filepath.Join(dir, chapterFileName(no)),
+		[]byte(head.String()+c.Text), 0o644)
+}
+
+// RewriteIndex 只重写 data.ebfl 与 chapters.ebfl（章节文件已经写好在目录里）。
+//
+// 追更流程是「先补新章文件、最后改索引」：索引里的 chapters 是固件判断
+// 总章数的依据，先改它而章节没写全，书架会显示 N 章但点进去缺文件。
+func RewriteIndex(dir string, titles []string, title, author, intro string, cover *Cover) error {
+	var idx strings.Builder
+	for i, name := range titles {
+		if name == "" {
+			name = fmt.Sprintf("第 %d 章", i+1)
+		}
+		idx.WriteString(name)
+		idx.WriteString("\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "chapters.ebfl"),
+		[]byte(idx.String()), 0o644); err != nil {
+		return fmt.Errorf("写章节索引失败: %w", err)
+	}
+
+	if cover != nil && len(cover.Data) > 0 {
+		if err := os.WriteFile(filepath.Join(dir, "cover.raw"), cover.Data, 0o644); err != nil {
+			return fmt.Errorf("写封面失败: %w", err)
+		}
+	}
+
+	var lines []string
+	lines = append(lines,
+		`<?xml version="1.0" encoding="utf-8"?>`,
+		fmt.Sprintf(`<book chapters="%d">`, len(titles)))
+	lines = append(lines, "<title>"+xmlEscape(title)+"</title>")
+	if author != "" {
+		lines = append(lines, "<author>"+xmlEscape(author)+"</author>")
+	}
+	if intro != "" {
+		lines = append(lines, "<intro>"+xmlEscape(intro)+"</intro>")
+	}
+	if cover != nil && len(cover.Data) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			`<cover width="%d" height="%d" file="cover.raw" format="rgb565le"/>`,
+			cover.W, cover.H))
+	}
+	lines = append(lines, "</book>")
+
+	return os.WriteFile(filepath.Join(dir, "data.ebfl"),
+		[]byte(strings.Join(lines, "\n")+"\n"), 0o644)
+}
+
 // writeEBF 生成 EBF 目录。outDir 若已存在会被清空重建（覆盖更新由上层决定）。
 func writeEBF(outDir string, chapters []Chapter, title, author, intro string, cover *Cover) error {
 	if err := os.RemoveAll(outDir); err != nil {

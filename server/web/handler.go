@@ -16,6 +16,7 @@ import (
 
 	"clockreader-server/api"
 	"clockreader-server/db"
+	"clockreader-server/fanqie"
 )
 
 // Handler 持有数据层与上传依赖。
@@ -23,6 +24,10 @@ type Handler struct {
 	Store *db.Store
 	// Importer 在 EPUB 上传后被调用（转换 + 入库）。
 	Importer func(name string, data []byte) (*db.Book, error)
+	// FanqieImporter 后台抓一本番茄书并入库。
+	FanqieImporter func(book fanqie.Book) (*db.Book, error)
+	// FanqieUpdater 检查一本番茄书有没有新章。
+	FanqieUpdater func(book *db.Book) (bool, int, error)
 	// Logs 是服务端日志缓冲，管理页底部轮询显示。
 	Logs *LogBuffer
 	// Addr 是监听地址，用于在页面顶部显示访问入口。
@@ -128,6 +133,9 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
  .btn-del{height:26px;padding:0 10px;font-size:12px;border-radius:6px;
   background:rgba(229,72,77,.14);color:#f08589;border:1px solid rgba(229,72,77,.25)}
  .btn-del:hover{background:rgba(229,72,77,.24)}
+ .btn-sync{height:26px;padding:0 10px;font-size:12px;border-radius:6px;
+  background:rgba(21,133,192,.16);color:#6fc6f0;border:1px solid rgba(21,133,192,.3)}
+ .btn-sync:hover{background:rgba(21,133,192,.28)}
 
  /* 表格 */
  .table-wrap{margin:0 -6px;overflow-x:auto}
@@ -285,7 +293,14 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
       <td><span class="tag tag-{{.Source}}">{{.SourceLabel}}</span></td>
       <td class="muted nowrap">{{.UpdatedAt}}</td>
       <td class="nowrap">
-        <form method="post" action="/delete" style="margin:0"
+        {{if eq .Source "fanqie"}}
+        <form method="post" action="/fanqie/update" style="margin:0;display:inline"
+              onsubmit="return confirm('检查《{{.Title}}》有没有新章？')">
+          <input type="hidden" name="id" value="{{.ID}}">
+          <button class="btn btn-sync" type="submit">更新</button>
+        </form>
+        {{end}}
+        <form method="post" action="/delete" style="margin:0;display:inline"
               onsubmit="return confirm('确定删除《{{.Title}}》？文件会一并删除，设备端已下载的副本不受影响。')">
           <input type="hidden" name="id" value="{{.ID}}">
           <button class="btn btn-del" type="submit">删除</button>
@@ -341,6 +356,10 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
       <button class="btn" type="submit" style="width:100%;margin-top:10px;height:38px">
         ▶ 开始导入
       </button>
+      <a class="btn btn-ghost" href="/fanqie"
+         style="width:100%;margin-top:8px;height:34px;justify-content:center;text-decoration:none">
+        🔍 番茄小说搜索
+      </a>
     </form>
 
     <div class="card-head" style="margin:16px 0 2px">
@@ -612,6 +631,7 @@ func (h *Handler) Register(mux *http.ServeMux, addr string) {
 	mux.HandleFunc("/delete", h.deleteBook)
 	h.registerCover(mux)
 	h.registerLogs(mux)
+	h.registerFanqie(mux)
 }
 
 // deleteBook 删除一本书：先删数据库记录，再删 EBF 目录。

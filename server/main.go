@@ -12,6 +12,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io"
 	"log"
@@ -23,6 +24,7 @@ import (
 	"clockreader-server/api"
 	"clockreader-server/db"
 	"clockreader-server/discover"
+	"clockreader-server/fanqie"
 	"clockreader-server/importer"
 	"clockreader-server/web"
 )
@@ -70,8 +72,19 @@ func main() {
 	}
 	webHandler := &web.Handler{
 		Store: store, Importer: imp.Import, Logs: logBuf, Addr: cfg.HTTPAddr,
+		FanqieImporter: func(book fanqie.Book) (*db.Book, error) {
+			return imp.ImportFanqie(book, importer.FanqieOptions())
+		},
+		FanqieUpdater: func(book *db.Book) (bool, int, error) {
+			return imp.UpdateFanqie(book, importer.FanqieOptions())
+		},
 	}
 	webHandler.Register(mux, cfg.HTTPAddr)
+
+	// 番茄追更：每 6 小时检查一次已导入的番茄书
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	imp.StartUpdater(ctx, 6*time.Hour)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

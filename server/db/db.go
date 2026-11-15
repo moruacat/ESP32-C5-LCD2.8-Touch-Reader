@@ -353,6 +353,29 @@ func (s *Store) RecentJobs(limit int) ([]Job, error) {
 	return out, rows.Err()
 }
 
+// ListFanqieBooks 取出所有番茄来源的书（追更用）。
+func (s *Store) ListFanqieBooks() ([]Book, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, author, fanqie_id, chapters, bytes, hash, source,
+		       ebf_dir, cover_bytes, updated_at
+		FROM books WHERE source = 'fanqie' AND fanqie_id != '' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Book
+	for rows.Next() {
+		var b Book
+		if err := rows.Scan(&b.ID, &b.Title, &b.Author, &b.FanqieID, &b.Chapters,
+			&b.Bytes, &b.Hash, &b.Source, &b.EbfDir, &b.CoverBytes, &b.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // AddJob 记录一个后台任务，返回 ID。
 func (s *Store) AddJob(kind string) (int64, error) {
 	res, err := s.db.Exec(`
