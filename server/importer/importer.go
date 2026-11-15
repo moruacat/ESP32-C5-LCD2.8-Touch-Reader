@@ -7,6 +7,7 @@ package importer
 import (
 	"fmt"
 	"hash/fnv"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -67,6 +68,24 @@ func (im *Importer) Import(name string, data []byte) (*db.Book, error) {
 	res, err := ebf.Convert(tmpPath, tmpOut, DefaultOptions())
 	if err != nil {
 		return nil, fmt.Errorf("转换失败：%w", err)
+	}
+
+	log.Printf("转换完成：%q / %q  %d 章  %d 字节  %s  %s",
+		res.Title, res.Author, res.Chapters, res.Bytes,
+		func() string {
+			if res.UsedTOC {
+				return "按目录切分"
+			}
+			return "按文件切分"
+		}(),
+		func() string {
+			if res.Cover != nil {
+				return fmt.Sprintf("封面 %dx%d", res.Cover.W, res.Cover.H)
+			}
+			return "无封面"
+		}())
+	for _, warn := range res.Warnings {
+		log.Printf("  [警告] %s", warn)
 	}
 
 	// 3. 按书名挪到最终位置（同名即覆盖更新）
