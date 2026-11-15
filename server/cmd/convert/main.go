@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	indent := flag.Bool("indent", true, "段首两个全角空格")
+	indent := flag.Bool("indent", false, "段首两个全角空格（默认关：小屏密排更耐读）")
 	blank := flag.Bool("blank", false, "段间空行（默认关：小屏阅读器上太占地方）")
 	skip := flag.Int("skip", 0, "跳过前 N 章（丢掉简介/前言这类开头页）")
 	dedup := flag.Bool("dedup", true, "去掉正文开头与章名重复的那一行")

@@ -24,13 +24,13 @@ type Importer struct {
 
 // DefaultOptions 是服务端的固定转换参数。
 //
-// BlankLine 关掉：段间再空一行在小屏阅读器上太浪费竖屏空间，
-// 实测一行段落中间隔一个空行读起来反而断。保留段首两个全角空格做分句，
-// 这也正是固件阅读器的显示习惯。
+// 两项排版都关掉，只做纯文本整理（一行一段、合并空行、去重章名）：
+// 实测在 320x240 的小屏上，段首缩进 + 段间空行都会把有效行数吃掉，
+// 密排反而更好读。段与段靠换行自然分开，固件阅读器本来就一行一段。
 func DefaultOptions() ebf.Options {
 	return ebf.Options{
 		BlankLine:  false,
-		Indent:     true,
+		Indent:     false,
 		DedupTitle: true,
 	}
 }
