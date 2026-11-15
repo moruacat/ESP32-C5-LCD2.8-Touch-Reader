@@ -400,3 +400,20 @@ fail:
     (void)srv_fs_remove_tree(dir);
     return err != ESP_OK ? err : ESP_FAIL;
 }
+
+bool srv_catalog_is_downloaded(const srv_catalog_book_t *book)
+{
+    if (book == NULL || !srv_sd_is_mounted()) {
+        return false;
+    }
+
+    char name[SRV_CATALOG_NAME_MAX];
+    safe_name(book->title, name, sizeof(name));
+
+    char path[96];
+    snprintf(path, sizeof(path), "%s/books/%s.ebf/data.ebfl",
+             srv_sd_mount_point(), name);
+
+    srv_fs_entry_t st;
+    return srv_fs_stat(path, &st) == ESP_OK;
+}

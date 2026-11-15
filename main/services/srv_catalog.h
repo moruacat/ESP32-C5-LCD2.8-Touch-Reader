@@ -51,6 +51,13 @@ typedef void (*srv_catalog_progress_cb_t)(int done, int total);
 esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
                                srv_catalog_progress_cb_t progress_cb);
 
+/**
+ * @brief 这本书是否已经下载到 SD（/books/<书名>.ebf/data.ebfl 存在）
+ *
+ * 批量下载用它跳过已下载的书。
+ */
+bool srv_catalog_is_downloaded(const srv_catalog_book_t *book);
+
 #ifdef __cplusplus
 }
 #endif

@@ -117,6 +117,120 @@ static void discover_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* ===================== 批量下载 ===================== */
+
+static int s_batch_total;
+static int s_batch_done;
+
+static void batch_progress(int done, int total)
+{
+    if (bsp_display_lock(200) != ESP_OK) {
+        return;
+    }
+    if (s_root != NULL && s_hint_lb != NULL) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "批量 %d/%d 本 · 本书 %d/%d 章",
+                 s_batch_done + 1, s_batch_total, done, total);
+        lv_label_set_text(s_hint_lb, msg);
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_PRIMARY, 0);
+    }
+    bsp_display_unlock();
+}
+
+static void batch_task(void *arg)
+{
+    (void)arg;
+
+    int ok = 0;
+    int fail = 0;
+
+    for (int i = 0; i < s_book_count; i++) {
+        if (srv_catalog_is_downloaded(&s_books[i])) {
+            continue;               /* 已下载的跳过 */
+        }
+        esp_err_t err = srv_catalog_download(&s_books[i], batch_progress);
+        if (err == ESP_OK) {
+            ok++;
+        } else {
+            fail++;
+        }
+        s_batch_done++;
+    }
+
+    if (bsp_display_lock(1000) == ESP_OK) {
+        if (s_root != NULL && s_hint_lb != NULL) {
+            char msg[64];
+            if (fail == 0) {
+                snprintf(msg, sizeof(msg), "批量下载完成：%d 本", ok);
+                lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_OK, 0);
+            } else {
+                snprintf(msg, sizeof(msg), "批量下载：成功 %d 本，失败 %d 本", ok, fail);
+                lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEMP, 0);
+            }
+            lv_label_set_text(s_hint_lb, msg);
+        }
+        bsp_display_unlock();
+    }
+
+    s_downloading = false;
+    vTaskDelete(NULL);
+}
+
+static void on_batch_confirm(void *arg)
+{
+    (void)arg;
+
+    s_batch_total = 0;
+    for (int i = 0; i < s_book_count; i++) {
+        if (!srv_catalog_is_downloaded(&s_books[i])) {
+            s_batch_total++;
+        }
+    }
+    s_batch_done = 0;
+    s_downloading = true;
+
+    lv_label_set_text(s_hint_lb, "开始批量下载 ...");
+    lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_PRIMARY, 0);
+
+    if (xTaskCreate(batch_task, "ui_batch", 8192, NULL, 3, NULL) != pdPASS) {
+        s_downloading = false;
+        lv_label_set_text(s_hint_lb, "批量任务创建失败");
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEMP, 0);
+    }
+}
+
+static void on_download_all(lv_event_t *e)
+{
+    (void)e;
+
+    if (s_book_count == 0 || s_books == NULL) {
+        lv_label_set_text(s_hint_lb, "书单是空的，先点「刷新」");
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEXT_DIM, 0);
+        return;
+    }
+    if (s_downloading) {
+        lv_label_set_text(s_hint_lb, "已有下载在进行");
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEMP, 0);
+        return;
+    }
+
+    int pending = 0;
+    for (int i = 0; i < s_book_count; i++) {
+        if (!srv_catalog_is_downloaded(&s_books[i])) {
+            pending++;
+        }
+    }
+    if (pending == 0) {
+        lv_label_set_text(s_hint_lb, "书单里的都已经下载了");
+        lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEXT_DIM, 0);
+        return;
+    }
+
+    char note[96];
+    snprintf(note, sizeof(note), "还有 %d 本未下载，确认全部下载到 SD？", pending);
+    ui_dialog_confirm("全部下载？", note, "下载", on_batch_confirm, NULL);
+}
+
 /* ===================== 下载 ===================== */
 
 static void dl_progress(int done, int total)
@@ -334,9 +448,10 @@ void ui_online_create(lv_obj_t *root)
     ui_row_btn_create(row, -8, 56, "发现", on_discover, NULL);
     refresh_addr_locked();
 
-    /* ---- 刷新书单 ---- */
-    row = ui_row_create(root, top + 44, NULL, "拉取书单");
-    ui_row_btn_create(row, -8, 56, "刷新", on_fetch, NULL);
+    /* ---- 刷新书单 + 全部下载 ---- */
+    row = ui_row_create(root, top + 44, NULL, "书单");
+    ui_row_btn_create(row, -8, 52, "刷新", on_fetch, NULL);
+    ui_row_btn_create(row, -64, 52, "全部", on_download_all, NULL);
 
     /* ---- 状态提示 ---- */
     s_hint_lb = lv_label_create(root);
