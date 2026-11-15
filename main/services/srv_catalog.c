@@ -213,6 +213,10 @@ void srv_catalog_free(srv_catalog_book_t *list)
 
 /* ===================== 下载 ===================== */
 
+/* 定义在文件末尾（与 srv_catalog_state 放在一起），这里先声明：
+ * 下载流程要用它判断「本地已有几章」来决定全量还是增量。 */
+static int local_chapters(const srv_catalog_book_t *book);
+
 #define DOWNLOAD_BUF   4096
 #define META_MAX_BYTES (2 * 1024 * 1024)   /* data/chapters/cover 各自的硬上限 */
 
