@@ -13,6 +13,7 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -47,6 +48,10 @@ func main() {
 	}
 	defer store.Close()
 
+	// 日志同时进 stderr 和内存缓冲：管理页底部轮询 /api/logs 显示
+	logBuf := web.NewLogBuffer()
+	log.SetOutput(io.MultiWriter(os.Stderr, logBuf))
+
 	// UDP 发现：让设备不用手填 IP
 	go func() {
 		if err := discover.Run(cfg.UDPPort, cfg.Name, cfg.HTTPAddr); err != nil {
@@ -63,7 +68,9 @@ func main() {
 		Store:   store,
 		EbfRoot: filepath.Join(cfg.DataDir, "books"),
 	}
-	webHandler := &web.Handler{Store: store, Importer: imp.Import}
+	webHandler := &web.Handler{
+		Store: store, Importer: imp.Import, Logs: logBuf, Addr: cfg.HTTPAddr,
+	}
 	webHandler.Register(mux, cfg.HTTPAddr)
 
 	srv := &http.Server{

@@ -7,6 +7,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -236,6 +237,120 @@ func (s *Store) DeleteBook(id int64) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ListOptions 是管理页书库列表的查询条件。
+type ListOptions struct {
+	Search string // 书名/作者模糊匹配
+	Source string // "upload" / "fanqie"；空 = 全部
+	Sort   string // "recent"（默认）/ "title"
+	Offset int
+	Limit  int
+}
+
+// ListBooksPage 按条件分页查书，同时返回满足条件的总数。
+func (s *Store) ListBooksPage(opt ListOptions) ([]Book, int, error) {
+	var where []string
+	var args []any
+
+	if opt.Search != "" {
+		where = append(where, "(title LIKE ? OR author LIKE ?)")
+		like := "%" + opt.Search + "%"
+		args = append(args, like, like)
+	}
+	if opt.Source != "" {
+		where = append(where, "source = ?")
+		args = append(args, opt.Source)
+	}
+
+	cond := ""
+	if len(where) > 0 {
+		cond = " WHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM books"+cond, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	order := " ORDER BY updated_at DESC, id DESC"
+	if opt.Sort == "title" {
+		order = " ORDER BY title ASC"
+	}
+
+	limit := opt.Limit
+	if limit <= 0 {
+		limit = 24
+	}
+	if opt.Offset < 0 {
+		opt.Offset = 0
+	}
+
+	q := `SELECT id, title, author, fanqie_id, chapters, bytes, hash, source,
+	             ebf_dir, cover_bytes, updated_at
+	      FROM books` + cond + order + ` LIMIT ? OFFSET ?`
+	args = append(args, limit, opt.Offset)
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var out []Book
+	for rows.Next() {
+		var b Book
+		if err := rows.Scan(&b.ID, &b.Title, &b.Author, &b.FanqieID, &b.Chapters,
+			&b.Bytes, &b.Hash, &b.Source, &b.EbfDir, &b.CoverBytes, &b.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, b)
+	}
+	return out, total, rows.Err()
+}
+
+// Stats 返回全库概览数字。
+func (s *Store) Stats() (books int, chapters int, bytes int64, err error) {
+	err = s.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(chapters), 0), COALESCE(SUM(bytes), 0)
+		FROM books`).Scan(&books, &chapters, &bytes)
+	return
+}
+
+// Job 是一条后台任务记录。
+type Job struct {
+	ID        int64
+	Kind      string
+	Status    string
+	Progress  int
+	Message   string
+	BookID    int64
+	CreatedAt string
+}
+
+// RecentJobs 取最近的任务，新的在前。
+func (s *Store) RecentJobs(limit int) ([]Job, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.db.Query(`
+		SELECT id, kind, status, progress, message, book_id, created_at
+		FROM jobs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(&j.ID, &j.Kind, &j.Status, &j.Progress,
+			&j.Message, &j.BookID, &j.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
 }
 
 // AddJob 记录一个后台任务，返回 ID。
