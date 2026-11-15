@@ -9,9 +9,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	"clockreader-server/api"
 	"clockreader-server/db"
 )
 
@@ -122,6 +125,9 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
  .btn:hover{background:var(--accent-lit)}
  .btn-ghost{background:rgba(255,255,255,.05);color:#cddbe8;border:1px solid var(--line)}
  .btn-ghost:hover{background:rgba(255,255,255,.09)}
+ .btn-del{height:26px;padding:0 10px;font-size:12px;border-radius:6px;
+  background:rgba(229,72,77,.14);color:#f08589;border:1px solid rgba(229,72,77,.25)}
+ .btn-del:hover{background:rgba(229,72,77,.24)}
 
  /* 表格 */
  .table-wrap{margin:0 -6px;overflow-x:auto}
@@ -187,6 +193,9 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
  .jobs .t{flex:1;min-width:0}
  .jobs .t b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  .jobs .t span{color:var(--dim);font-size:12px}
+ .sync-row{display:flex;align-items:flex-start;gap:9px;padding:8px 0;font-size:13px}
+ .sync-row .t b{display:block;font-weight:500}
+ .sync-row .t span{color:var(--dim);font-size:12px}
 
  /* 日志 */
  .log-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
@@ -258,6 +267,7 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
       <th class="num col-size">大小</th>
       <th>来源</th>
       <th class="nowrap">更新时间</th>
+      <th>操作</th>
     </tr></thead>
     <tbody>
     {{range .Books}}
@@ -274,6 +284,13 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
       <td class="num col-size">{{.BytesHuman}}</td>
       <td><span class="tag tag-{{.Source}}">{{.SourceLabel}}</span></td>
       <td class="muted nowrap">{{.UpdatedAt}}</td>
+      <td class="nowrap">
+        <form method="post" action="/delete" style="margin:0"
+              onsubmit="return confirm('确定删除《{{.Title}}》？文件会一并删除，设备端已下载的副本不受影响。')">
+          <input type="hidden" name="id" value="{{.ID}}">
+          <button class="btn btn-del" type="submit">删除</button>
+        </form>
+      </td>
     </tr>
     {{end}}
     </tbody></table>
@@ -325,6 +342,14 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
         ▶ 开始导入
       </button>
     </form>
+
+    <div class="card-head" style="margin:16px 0 2px">
+      <h2 style="font-size:13px;color:var(--muted)">设备同步</h2>
+    </div>
+    <div class="sync-row">
+      <span class="ji {{if .DeviceOnline}}ji-ok{{else}}ji-run{{end}}">⟳</span>
+      <span class="t"><b>{{.DeviceText}}</b><span>{{.Hint}}</span></span>
+    </div>
 
     <div class="card-head" style="margin:16px 0 2px">
       <h2 style="font-size:13px;color:var(--muted)">最近任务</h2>
@@ -533,6 +558,26 @@ func atoiDef(s string, def int) int {
 	return n
 }
 
+// deviceStatus 把「设备最后一次访问」变成一句话。
+// 2 分钟内访问过算在线（设备刷新书单/下载章节都会刷新时间）。
+func deviceStatus() (online bool, text string) {
+	seen := api.LastSeen()
+	if seen == 0 {
+		return false, "尚未收到设备请求"
+	}
+	d := time.Since(time.Unix(seen, 0))
+	switch {
+	case d < 2*time.Minute:
+		return true, "设备在线 · 刚刚同步"
+	case d < time.Hour:
+		return true, fmt.Sprintf("设备在线 · %d 分钟前同步", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return false, fmt.Sprintf("%d 小时前同步", int(d.Hours()))
+	default:
+		return false, fmt.Sprintf("%d 天前同步", int(d.Hours()/24))
+	}
+}
+
 // buildPages 生成分页条：首页、末页、当前页左右各 1 页，其余用省略号。
 func buildPages(cur, total int) []pageLink {
 	var out []pageLink
@@ -564,8 +609,44 @@ func buildPages(cur, total int) []pageLink {
 func (h *Handler) Register(mux *http.ServeMux, addr string) {
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/upload", h.upload)
+	mux.HandleFunc("/delete", h.deleteBook)
 	h.registerCover(mux)
 	h.registerLogs(mux)
+}
+
+// deleteBook 删除一本书：先删数据库记录，再删 EBF 目录。
+func (h *Handler) deleteBook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "只支持 POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := int64(atoiDef(r.FormValue("id"), 0))
+	if id <= 0 {
+		http.Error(w, "缺少有效的 id", http.StatusBadRequest)
+		return
+	}
+
+	book, err := h.Store.GetBook(id)
+	if err != nil {
+		http.Error(w, "书不存在", http.StatusNotFound)
+		return
+	}
+
+	if err := h.Store.DeleteBook(id); err != nil {
+		http.Error(w, "删除失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 目录删不掉不算致命：数据库已删，书不会再出现，残留文件下次清理
+	if book.EbfDir != "" {
+		if err := os.RemoveAll(book.EbfDir); err != nil {
+			log.Printf("删除目录失败 %s: %v", book.EbfDir, err)
+		}
+	}
+
+	log.Printf("已删除 《%s》", book.Title)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
@@ -640,6 +721,8 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		page = pages
 	}
 
+	deviceOnline, deviceText := deviceStatus()
+
 	pageURL := "/?"
 	if search != "" {
 		pageURL += "q=" + url.QueryEscape(search) + "&"
@@ -668,6 +751,8 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		Sort          string
 		Filtered      bool
 		Jobs          []jobRow
+		DeviceOnline  bool
+		DeviceText    string
 	}{
 		Hint: listenHint(h.Addr), Err: errMsg,
 		Count: count, TotalChapters: chapters, TotalBytes: humanBytes(totalBytes),
@@ -676,6 +761,8 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		Search: search, Source: source, Sort: sortBy,
 		Filtered: search != "" || source != "",
 		Jobs:     jobRows,
+		DeviceOnline: deviceOnline,
+		DeviceText:   deviceText,
 	}
 
 	if err := indexTmpl.Execute(w, data); err != nil {

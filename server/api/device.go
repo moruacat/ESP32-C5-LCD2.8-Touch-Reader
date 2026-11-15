@@ -12,11 +12,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"clockreader-server/db"
 )
 
 const apiVersion = 1
+
+// lastSeen 记录设备最近一次访问设备 API 的时间（Unix 秒，0 = 从未）。
+// 管理页用它显示「设备同步」状态 —— 设备每拉一次书单/章节都会刷新。
+var lastSeen atomic.Int64
+
+// Touch 记录一次设备访问。
+func Touch() { lastSeen.Store(time.Now().Unix()) }
+
+// LastSeen 返回设备最后一次访问的 Unix 时间；0 表示从未访问。
+func LastSeen() int64 { return lastSeen.Load() }
 
 // Handler 持有数据层。
 type Handler struct {
@@ -37,11 +49,13 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (h *Handler) ping(w http.ResponseWriter, r *http.Request) {
+	Touch()
 	writeJSON(w, map[string]any{"ok": true, "ver": apiVersion})
 }
 
 // books 返回书单（设备用来对比本地有哪些书）。
 func (h *Handler) books(w http.ResponseWriter, r *http.Request) {
+	Touch()
 	books, err := h.Store.ListBooks()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -58,6 +72,7 @@ func (h *Handler) books(w http.ResponseWriter, r *http.Request) {
 //	cover     → cover.raw（RGB565 LE）
 //	chapter/N → 第 N 章正文
 func (h *Handler) book(w http.ResponseWriter, r *http.Request) {
+	Touch()
 	rest := strings.TrimPrefix(r.URL.Path, "/api/books/")
 	if rest == "" {
 		http.NotFound(w, r)

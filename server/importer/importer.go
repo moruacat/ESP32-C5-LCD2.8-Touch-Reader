@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"clockreader-server/db"
@@ -35,8 +36,37 @@ func DefaultOptions() ebf.Options {
 	}
 }
 
-// Import 处理一次上传。name 只用于日志；书名以 EPUB 里的元数据为准。
+// Import 处理一次上传，并把过程记成一条 jobs 记录（管理页「最近任务」用）。
 func (im *Importer) Import(name string, data []byte) (*db.Book, error) {
+	short := strings.TrimSuffix(name, filepath.Ext(name))
+
+	jobID, jobErr := im.Store.AddJob("upload")
+	if jobErr != nil {
+		jobID = 0 // 记任务失败不影响导入本身
+	}
+	if jobID > 0 {
+		_ = im.Store.UpdateJob(jobID, "running", 10,
+			fmt.Sprintf("导入《%s》转换中…", short), 0)
+	}
+
+	book, err := im.importInternal(name, data)
+	if err != nil {
+		if jobID > 0 {
+			_ = im.Store.UpdateJob(jobID, "fail", 0,
+				fmt.Sprintf("导入《%s》失败：%v", short, err), 0)
+		}
+		return nil, err
+	}
+
+	if jobID > 0 {
+		_ = im.Store.UpdateJob(jobID, "done", 100,
+			fmt.Sprintf("导入《%s》完成 · %d 章", book.Title, book.Chapters), book.ID)
+	}
+	return book, nil
+}
+
+// importInternal 是真正的导入流程。
+func (im *Importer) importInternal(name string, data []byte) (*db.Book, error) {
 	if im.EbfRoot == "" {
 		return nil, fmt.Errorf("未配置 EbfRoot")
 	}
