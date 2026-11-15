@@ -189,6 +189,9 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
  .drop small{display:block;margin-top:4px;color:var(--dim);font-size:12px}
  .drop input{display:none}
  .pick{font-size:12.5px;color:var(--dim);margin:8px 0 0;text-align:center;word-break:break-all}
+ .progress{height:6px;border-radius:3px;background:#0b121a;overflow:hidden;margin-top:10px}
+ .progress-bar{height:100%;width:0;border-radius:3px;
+  background:linear-gradient(90deg,#1585c0,#1ba3e6);transition:width .18s ease-out}
  .jobs{list-style:none;margin:14px 0 0;padding:0}
  .jobs li{display:flex;align-items:flex-start;gap:9px;padding:8px 0;
   border-bottom:1px solid rgba(29,41,55,.5);font-size:13px}
@@ -353,6 +356,9 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
         <small>可一次拖多个，或点击多选</small>
       </label>
       <p class="pick" id="drop-note">同名书会被覆盖更新</p>
+      <div class="progress" id="progress-wrap" style="display:none">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
       <button class="btn" type="submit" style="width:100%;margin-top:10px;height:38px">
         ▶ 开始导入
       </button>
@@ -461,6 +467,66 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
     var names = [];
     for (var i = 0; i < Math.min(n, 3); i++) names.push(input.files[i].name);
     setNote('已选择 ' + n + ' 个文件：' + names.join('、') + (n > 3 ? ' 等' : ''));
+  });
+
+  // ---- 上传进度：用 XHR 才能拿到 upload.onprogress（fetch 不支持） ----
+  var pwrap = document.getElementById('progress-wrap');
+  var pbar = document.getElementById('progress-bar');
+  var busy = false;
+
+  function mb(n) { return (n / 1024 / 1024).toFixed(1) + ' MB'; }
+
+  form.addEventListener('submit', function(e){
+    if (busy) { e.preventDefault(); return; }
+    var files = input.files;
+    if (!files || !files.length) return;   // 让浏览器自己弹「请选择文件」
+
+    e.preventDefault();
+    busy = true;
+
+    var fd = new FormData();
+    for (var i = 0; i < files.length; i++) fd.append('file', files[i]);
+
+    pwrap.style.display = 'block';
+    pbar.style.width = '0%';
+    setNote('准备上传 ' + files.length + ' 个文件…');
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload');
+
+    xhr.upload.onprogress = function(ev){
+      if (!ev.lengthComputable) return;
+      var pct = Math.round(ev.loaded / ev.total * 100);
+      pbar.style.width = pct + '%';
+      setNote('上传中 ' + pct + '%  ' + mb(ev.loaded) + ' / ' + mb(ev.total));
+    };
+
+    // 上传完成但服务端还在解析/转换（大书要几十秒）
+    xhr.upload.onload = function(){
+      pbar.style.width = '100%';
+      setNote('上传完成，服务端转换中…（大书可能要几十秒）');
+    };
+
+    xhr.onload = function(){
+      // 成功时服务端 303 重定向到首页
+      if (xhr.status >= 300 && xhr.status < 400) {
+        setNote('导入完成，正在刷新…');
+        location.href = '/';
+        return;
+      }
+      busy = false;
+      pwrap.style.display = 'none';
+      var msg = (xhr.responseText || '').trim();
+      setNote('上传失败（HTTP ' + xhr.status + '）：' + (msg.slice(0, 120) || '未知错误'), true);
+    };
+
+    xhr.onerror = function(){
+      busy = false;
+      pwrap.style.display = 'none';
+      setNote('网络错误，上传失败', true);
+    };
+
+    xhr.send(fd);
   });
   window.addEventListener('dragover', function(e){ e.preventDefault(); });
   window.addEventListener('drop', function(e){ e.preventDefault(); });
