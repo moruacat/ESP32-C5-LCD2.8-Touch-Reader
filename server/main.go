@@ -12,7 +12,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"io"
 	"log"
@@ -87,10 +86,11 @@ func main() {
 	}
 	webHandler.Register(mux, cfg.HTTPAddr)
 
-	// 番茄追更：每 6 小时检查一次已导入的番茄书
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	imp.StartUpdater(ctx, 6*time.Hour)
+	// 番茄追更暂不启用（用户决定不用番茄）：
+	// 代码保留，需要时把下面两行放回来即可。
+	// ctx, cancel := context.WithCancel(context.Background())
+	// defer cancel()
+	// imp.StartUpdater(ctx, 6*time.Hour)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

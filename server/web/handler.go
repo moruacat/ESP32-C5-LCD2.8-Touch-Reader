@@ -356,10 +356,6 @@ var indexTmpl = template.Must(template.New("index").Funcs(tmplFuncs).Parse(`<!do
       <button class="btn" type="submit" style="width:100%;margin-top:10px;height:38px">
         ▶ 开始导入
       </button>
-      <a class="btn btn-ghost" href="/fanqie"
-         style="width:100%;margin-top:8px;height:34px;justify-content:center;text-decoration:none">
-        🔍 番茄小说搜索
-      </a>
     </form>
 
     <div class="card-head" style="margin:16px 0 2px">
