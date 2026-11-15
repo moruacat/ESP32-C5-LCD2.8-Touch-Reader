@@ -22,11 +22,14 @@ type Importer struct {
 	EbfRoot string // data/books
 }
 
-// DefaultOptions 是服务端的固定转换参数：按用户要求的观感——
-// 段首两个全角空格 + 段间空行，并去掉正文开头重复的章名。
+// DefaultOptions 是服务端的固定转换参数。
+//
+// BlankLine 关掉：段间再空一行在小屏阅读器上太浪费竖屏空间，
+// 实测一行段落中间隔一个空行读起来反而断。保留段首两个全角空格做分句，
+// 这也正是固件阅读器的显示习惯。
 func DefaultOptions() ebf.Options {
 	return ebf.Options{
-		BlankLine:  true,
+		BlankLine:  false,
 		Indent:     true,
 		DedupTitle: true,
 	}

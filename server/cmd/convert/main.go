@@ -18,8 +18,8 @@ import (
 )
 
 func main() {
-	indent := flag.Bool("indent", true, "段首两个全角空格（复刻样本 EPUB 的 text-indent:2em）")
-	blank := flag.Bool("blank", true, "段间空行（复刻 p{margin:.8em}）")
+	indent := flag.Bool("indent", true, "段首两个全角空格")
+	blank := flag.Bool("blank", false, "段间空行（默认关：小屏阅读器上太占地方）")
 	skip := flag.Int("skip", 0, "跳过前 N 章（丢掉简介/前言这类开头页）")
 	dedup := flag.Bool("dedup", true, "去掉正文开头与章名重复的那一行")
 	out := flag.String("o", "", "输出目录；默认 <EPUB 同级>/<文件名>.ebf")
