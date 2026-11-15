@@ -1,5 +1,5 @@
-# ===== 构建产物 =====
 build/
+# ===== 构建产物 =====
 managed_components/
 .idf-cache/
 __pycache__/
@@ -18,6 +18,7 @@ dict/dict.dat
 dict/dict.idx
 dict/zhdict*
 photos/
+words/*/*
 
 # ===== 模拟器（仅本地调试用）=====
 sim/
@@ -32,9 +33,9 @@ main/assets/fonts/*.bak
 tools/netprobe.out.txt
 tools/t.txt
 
-./.dumate/
-./.trae/
-./.screenshots/
+.dumate/
+.trae/
+.screenshots/
 
 # --- 服务端（Go）---
 server/.gopath/
@@ -42,3 +43,11 @@ server/.gocache/
 server/clockreader-server*
 server/data/
 server/config.json
+
+# --- AI开发说明 ---
+
+项目.md
+新需求.md
+"Implement AI Funtionality.md"
+HANDOFF.md
+fanqiehelper.txt

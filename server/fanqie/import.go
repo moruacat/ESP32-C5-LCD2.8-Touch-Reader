@@ -85,7 +85,17 @@ func Import(cli *Client, book Book, outDir string, opt ImportOptions) (*ebf.Resu
 		intro = ebf.TruncateUTF8(intro, ebf.IntroMaxBytes)
 	}
 
-	if err := ebf.WriteDir(outDir, out, book.Title, book.Author, intro, nil); err != nil {
+	// 封面：番茄给的是 CDN 图片，转成固件要的 RGB565
+	var cover *ebf.Cover
+	if book.CoverURL != "" {
+		if raw, err := cli.Download(book.CoverURL); err == nil {
+			if cv, ok := ebf.ConvertCover(raw); ok {
+				cover = cv
+			}
+		}
+	}
+
+	if err := ebf.WriteDir(outDir, out, book.Title, book.Author, intro, cover); err != nil {
 		return nil, err
 	}
 
@@ -94,6 +104,7 @@ func Import(cli *Client, book Book, outDir string, opt ImportOptions) (*ebf.Resu
 		Author:   book.Author,
 		Chapters: len(out),
 		Dir:      outDir,
+		Cover:    cover,
 		Warnings: warnings,
 	}
 	for i, c := range out {
