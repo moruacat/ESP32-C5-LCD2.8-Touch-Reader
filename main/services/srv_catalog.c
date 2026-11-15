@@ -320,6 +320,149 @@ static esp_err_t http_get_to_file(const char *url, const char *path, size_t max_
     return result;
 }
 
+// 每批请求多少章。20 章约 140KB 响应，PSRAM 一次放得下；
+// 再大就体现不出「省掉 TCP 往返」之外的收益了。
+#define DL_BATCH 20
+
+/** 一次 GET 把响应读进 malloc 缓冲（调用方 free）。 */
+static char *http_get_buf(const char *url, size_t max_bytes, int *out_len)
+{
+    *out_len = 0;
+
+    esp_http_client_config_t cfg = {
+        .url         = url,
+        .timeout_ms  = HTTP_TIMEOUT_MS,
+        .buffer_size = 1024,
+    };
+    esp_http_client_handle_t cli = esp_http_client_init(&cfg);
+    if (cli == NULL) {
+        return NULL;
+    }
+
+    if (esp_http_client_open(cli, 0) != ESP_OK) {
+        esp_http_client_cleanup(cli);
+        return NULL;
+    }
+    (void)esp_http_client_fetch_headers(cli);
+
+    if (esp_http_client_get_status_code(cli) != 200) {
+        esp_http_client_close(cli);
+        esp_http_client_cleanup(cli);
+        return NULL;
+    }
+
+    int cap = 16 * 1024;
+    char *buf = malloc(cap);
+    if (buf == NULL) {
+        esp_http_client_close(cli);
+        esp_http_client_cleanup(cli);
+        return NULL;
+    }
+
+    int len = 0;
+    for (;;) {
+        if (len + 1 >= cap) {
+            if ((size_t)cap >= max_bytes) {
+                free(buf);
+                esp_http_client_close(cli);
+                esp_http_client_cleanup(cli);
+                return NULL;
+            }
+            int ncap = cap * 2;
+            char *nb = realloc(buf, ncap);
+            if (nb == NULL) {
+                free(buf);
+                esp_http_client_close(cli);
+                esp_http_client_cleanup(cli);
+                return NULL;
+            }
+            buf = nb;
+            cap = ncap;
+        }
+
+        int n = esp_http_client_read(cli, buf + len, cap - len - 1);
+        if (n < 0) {
+            free(buf);
+            esp_http_client_close(cli);
+            esp_http_client_cleanup(cli);
+            return NULL;
+        }
+        if (n == 0) {
+            break;
+        }
+        len += n;
+    }
+    buf[len] = '\0';
+
+    esp_http_client_close(cli);
+    esp_http_client_cleanup(cli);
+
+    *out_len = len;
+    return buf;
+}
+
+/**
+ * 解析批量响应并逐章落盘。
+ *
+ * 格式：
+ *   #CLOCKREADER-BATCH v1\n#COUNT n\n
+ *   #CHAPTER <no> <len>\n<len 字节原文>
+ *   ...
+ */
+static esp_err_t parse_batch(const char *buf, int len, const char *dir, int *written)
+{
+    const char *p = buf;
+    const char *end = buf + len;
+
+    while (p < end) {
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        if (nl == NULL) {
+            break;
+        }
+        const char *line = p;
+        const int line_len = (int)(nl - p);
+        p = nl + 1;
+
+        if (line_len <= 0 || line[0] != '#') {
+            continue;
+        }
+
+        /* 行在 buf 里不是 NUL 结尾，sscanf 前先拷到小缓冲 */
+        char hdr[32];
+        int hn = line_len < (int)sizeof(hdr) - 1 ? line_len : (int)sizeof(hdr) - 1;
+        memcpy(hdr, line, (size_t)hn);
+        hdr[hn] = '\0';
+
+        int no = 0;
+        unsigned sz = 0;
+        if (sscanf(hdr, "#CHAPTER %d %u", &no, &sz) != 2) {
+            continue;   /* #COUNT 之类的行 */
+        }
+        if (no <= 0 || (size_t)(end - p) < (size_t)sz) {
+            return ESP_FAIL;
+        }
+
+        char path[384];
+        snprintf(path, sizeof(path), "%s/chapter.%d.ebfl", dir, no);
+
+        FILE *fp = fopen(path, "wb");
+        if (fp == NULL) {
+            ESP_LOGE(TAG, "打不开 %s", path);
+            return ESP_FAIL;
+        }
+        const size_t wr = fwrite(p, 1, sz, fp);
+        fclose(fp);
+        if (wr != sz) {
+            ESP_LOGE(TAG, "写 %s 失败（SD 满了？）", path);
+            return ESP_FAIL;
+        }
+
+        p += sz;
+        (*written)++;
+    }
+    return ESP_OK;
+}
+
 esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
                                srv_catalog_progress_cb_t progress_cb)
 {
@@ -375,23 +518,44 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
     char url[192];
     char path[384];
 
-    /* ---- 先下正文章节，最后才更新元数据 ----
-     * 顺序很重要：data.ebfl 里的 chapters 是固件判断"这本书有多少章"的依据。
-     * 如果先更新它、章节却没下完，书架会显示 N 章但点进去缺文件。
-     * 放到最后，中途失败时本地的旧 data.ebfl 仍然和旧章节自洽。 */
-    for (int i = from; i <= book->chapters; i++) {
-        snprintf(url, sizeof(url), "%s/api/books/%lld/chapter/%d",
-                 base, (long long)book->id, i);
-        snprintf(path, sizeof(path), "%s/chapter.%d.ebfl", dir, i);
+    /* ---- 分批下载正文，最后才更新元数据 ----
+     * 一批 DL_BATCH 章（约 140KB）：大量小文件的主要开销是每章一次
+     * TCP 往返，批量把请求数降到 1/20，局域网下速度提升非常明显。
+     *
+     * 顺序仍然重要：data.ebfl 里的 chapters 是固件判断总章数的依据，
+     * 先写它而章节没下全，书架会显示 N 章但点进去缺文件。 */
+    for (int base = from; base <= book->chapters; base += DL_BATCH) {
+        int hi = base + DL_BATCH - 1;
+        if (hi > book->chapters) {
+            hi = book->chapters;
+        }
 
-        err = http_get_to_file(url, path, META_MAX_BYTES);
+        snprintf(url, sizeof(url), "%s/api/books/%lld/batch?from=%d&to=%d",
+                 base, (long long)book->id, base, hi);
+
+        int blen = 0;
+        char *buf = http_get_buf(url, 4 * 1024 * 1024, &blen);
+        if (buf == NULL) {
+            ESP_LOGE(TAG, "第 %d-%d 章批量下载失败", base, hi);
+            err = ESP_FAIL;
+            goto fail;
+        }
+
+        int written = 0;
+        err = parse_batch(buf, blen, dir, &written);
+        free(buf);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "第 %d/%d 章下载失败", i, book->chapters);
+            ESP_LOGE(TAG, "第 %d-%d 章解析/写盘失败", base, hi);
+            goto fail;
+        }
+        if (written == 0) {
+            ESP_LOGE(TAG, "第 %d-%d 章批量响应里没有章节", base, hi);
+            err = ESP_FAIL;
             goto fail;
         }
 
         if (progress_cb != NULL) {
-            progress_cb(i, book->chapters);
+            progress_cb(hi, book->chapters);
         }
     }
 

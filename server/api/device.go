@@ -6,6 +6,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -121,9 +122,89 @@ func (h *Handler) book(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.serveFile(w, book.EbfDir, "chapter."+strconv.Itoa(n)+".ebfl")
+	case op == "batch":
+		h.serveBatch(w, r, book)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// batchMaxChapters 是单次批量响应的章节上限。
+// 太大：响应体积和固件内存压力都上去了；太小：省不掉多少往返。
+const batchMaxChapters = 30
+
+// serveBatch 一次性返回 from..to 章，用极简分帧协议打包：
+//
+//	#CLOCKREADER-BATCH v1\n
+//	#COUNT <n>\n
+//	#CHAPTER <no> <len>\n
+//	<len 字节章节原文>
+//	#CHAPTER <no> <len>\n
+//	...
+//
+// 章节文件原样发送（不压缩、不转码），设备端读到 len 字节直接写 SD。
+// 这样一次请求能带走二三十章，把「每章一次 TCP 往返」的开销摊薄。
+func (h *Handler) serveBatch(w http.ResponseWriter, r *http.Request, book *db.Book) {
+	q := r.URL.Query()
+	from := atoiDefault(q.Get("from"), 1)
+	to := atoiDefault(q.Get("to"), from)
+
+	if from < 1 {
+		from = 1
+	}
+	if to < from {
+		to = from
+	}
+	if to-from+1 > batchMaxChapters {
+		to = from + batchMaxChapters - 1
+	}
+	if to > book.Chapters {
+		to = book.Chapters
+	}
+	if from > to {
+		http.Error(w, "no chapters in range", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "no-store")
+
+	// 先把要发的章节全部读出来，避免边写响应边读盘时出错只写了一半
+	type frame struct {
+		no   int
+		data []byte
+	}
+	frames := make([]frame, 0, to-from+1)
+	for n := from; n <= to; n++ {
+		path := filepath.Join(book.EbfDir, filepath.Clean(
+			"chapter."+strconv.Itoa(n)+".ebfl"))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue // 缺章就跳过，设备端按 no 落盘
+		}
+		frames = append(frames, frame{no: n, data: data})
+	}
+
+	if len(frames) == 0 {
+		http.Error(w, "chapters not found", http.StatusNotFound)
+		return
+	}
+
+	fmt.Fprintf(w, "#CLOCKREADER-BATCH v1\n#COUNT %d\n", len(frames))
+	for _, f := range frames {
+		fmt.Fprintf(w, "#CHAPTER %d %d\n", f.no, len(f.data))
+		if _, err := w.Write(f.data); err != nil {
+			return // 客户端断开
+		}
+	}
+}
+
+func atoiDefault(s string, def int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // serveFile 以流式方式回一个 EBF 文件（不整文件读进内存）。
