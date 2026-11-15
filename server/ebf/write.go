@@ -28,6 +28,17 @@ func xmlEscape(s string) string {
 	return r.Replace(s)
 }
 
+// WriteDir 把已经整理好的章节直接写成 EBF 目录。
+//
+// 给非 EPUB 来源（番茄下载）复用：那边拿到的是纯文本章节，
+// 不需要走 html→text 那套，但落盘格式必须和转换器完全一致。
+func WriteDir(outDir string, chapters []Chapter, title, author, intro string, cover *Cover) error {
+	if len(chapters) == 0 {
+		return fmt.Errorf("没有章节可写")
+	}
+	return writeEBF(outDir, chapters, title, author, intro, cover)
+}
+
 // writeEBF 生成 EBF 目录。outDir 若已存在会被清空重建（覆盖更新由上层决定）。
 func writeEBF(outDir string, chapters []Chapter, title, author, intro string, cover *Cover) error {
 	if err := os.RemoveAll(outDir); err != nil {

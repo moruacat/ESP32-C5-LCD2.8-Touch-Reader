@@ -12,6 +12,11 @@ import (
 
 // ---------- 文本截断 ----------
 
+// TruncateUTF8 按字节截断且不切出半个汉字（供非 EPUB 来源复用）。
+func TruncateUTF8(s string, maxBytes int) string {
+	return truncateUTF8(s, maxBytes)
+}
+
 // truncateUTF8 按字节截断且不切出半个汉字（对应 Python 的 truncate_utf8）。
 func truncateUTF8(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
