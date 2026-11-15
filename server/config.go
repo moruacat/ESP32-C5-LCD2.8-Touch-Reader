@@ -12,6 +12,11 @@ type Config struct {
 	UDPPort  int    `json:"udp_port"`  // 设备广播发现的端口
 	Name     string `json:"name"`      // 广播里给设备看的名字
 	DataDir  string `json:"data_dir"`  // SQLite 与 EBF 文件的存放目录
+
+	// FanqieCookie 是 fanqienovel.com 的登录 cookie（可选）。
+	// 带上它之后能取到"登录用户可见"的章节（含已购），否则只有免费/试读。
+	// 等同账号凭证：只放本地 config.json，管理页不回显。
+	FanqieCookie string `json:"fanqie_cookie,omitempty"`
 }
 
 func defaultConfig() Config {

@@ -40,6 +40,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
+
+	// 番茄 cookie（可选）：配了就能取到登录用户可见的章节
+	if cfg.FanqieCookie != "" {
+		fanqie.DefaultCookie = cfg.FanqieCookie
+		log.Printf("番茄登录态已加载（长度 %d 字节）", len(cfg.FanqieCookie))
+	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		log.Fatalf("创建数据目录失败: %v", err)
 	}

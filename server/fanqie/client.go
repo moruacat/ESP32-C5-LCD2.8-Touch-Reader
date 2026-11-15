@@ -41,11 +41,21 @@ var (
 // Client 是一个懒连接、无状态的抓取客户端。
 type Client struct {
 	HTTP *http.Client
+	// Cookie 是 fanqienovel.com 的登录态（可选）。
+	// 带上它之后，网页接口会下发"登录用户可见"的章节，而不只是免费试读。
+	Cookie string
 }
 
-// NewClient 默认 25 秒超时。
+// DefaultCookie 是全局默认 cookie，由服务端启动时从配置注入。
+// 放在包级是为了不把配置传进每一层调用。
+var DefaultCookie string
+
+// NewClient 默认 25 秒超时；cookie 取 DefaultCookie。
 func NewClient() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 25 * time.Second}}
+	return &Client{
+		HTTP:   &http.Client{Timeout: 25 * time.Second},
+		Cookie: DefaultCookie,
+	}
 }
 
 // SearchResult 是一条搜索结果。
@@ -148,6 +158,14 @@ func metaRe(key string) *regexp.Regexp {
 
 var titleRe = regexp.MustCompile(`(?s)<title[^>]*>(.*?)</title>`)
 
+// Download 下载一张图片（封面用）。
+func (c *Client) Download(rawURL string) ([]byte, error) {
+	if strings.TrimSpace(rawURL) == "" {
+		return nil, fmt.Errorf("空 URL")
+	}
+	return c.get(rawURL, webUA, "https://fanqienovel.com/")
+}
+
 // scoreText 把 score（数字或字符串）统一成展示文本。
 func scoreText(v any) string {
 	switch x := v.(type) {
@@ -171,6 +189,9 @@ func (c *Client) get(rawURL, ua, referer string) ([]byte, error) {	req, err := h
 	}
 	if referer != "" {
 		req.Header.Set("Referer", referer)
+	}
+	if c.Cookie != "" {
+		req.Header.Set("Cookie", c.Cookie)
 	}
 
 	resp, err := c.HTTP.Do(req)
