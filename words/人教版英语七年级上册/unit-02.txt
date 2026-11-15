@@ -1,4 +1,0 @@
-bottle
-eraser
-key
-thing

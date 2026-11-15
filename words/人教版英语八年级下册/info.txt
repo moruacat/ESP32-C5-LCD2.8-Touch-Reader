@@ -1,4 +1,0 @@
-name=人教版英语八年级下册
-units=8
-words=512
-unit_size=0

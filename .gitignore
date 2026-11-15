@@ -51,3 +51,5 @@ server/config.json
 "Implement AI Funtionality.md"
 HANDOFF.md
 fanqiehelper.txt
+fanqienovelhelper.txt
+server/fanqie/update.go
