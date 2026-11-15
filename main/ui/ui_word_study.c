@@ -28,7 +28,7 @@
 #define CARD_Y      24
 
 #define SWIPE_TH    64          /*!< 超过这个距离松手才算数 */
-#define SESS_WORDS  20          /*!< 每次随机抽多少个词 */
+#define SESS_WORDS  0           /*!< 0 = 选中的词全部过一遍 */
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_pick;        /*!< 选择视图 */
@@ -89,8 +89,19 @@ static void update_start_text(void)
     if (s_start_lb == NULL) {
         return;
     }
-    char buf[32];
-    snprintf(buf, sizeof(buf), "开始学习 (%d)", sel_count());
+    /* 显示"选中单元一共多少词"，比只显示单元数更能说明这轮要过多少 */
+    int words = 0;
+    for (int u = 0; u < srv_wordbook_unit_count(s_book); u++) {
+        if (s_sel[u]) {
+            words += srv_wordbook_unit_words(s_book, u);
+        }
+    }
+    char buf[40];
+    if (words > 0) {
+        snprintf(buf, sizeof(buf), "开始学习 (%d 词)", words);
+    } else {
+        snprintf(buf, sizeof(buf), "开始学习");
+    }
     lv_label_set_text(s_start_lb, buf);
 }
 

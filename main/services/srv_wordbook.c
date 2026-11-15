@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static const char *TAG = "srv_wb";
 
@@ -46,12 +47,54 @@ static int        s_unsaved = 0;    /*!< 距离上次落盘的改动数 */
 
 /* ===================== 会话 ===================== */
 
-static char s_sess[WB_UNIT_WORD_MAX][WB_NAME_MAX];
+/* 会话词表：容量跟选中的词走，堆分配（多单元一次几百词也能全装下）。
+ * 原来是静态 s_sess[WB_UNIT_WORD_MAX][WB_NAME_MAX]，48 词就截断了。 */
+static char (*s_sess)[WB_NAME_MAX] = NULL;
 static int  s_sess_n = 0;
 static int  s_sess_pos = 0;
 static int  s_known = 0;
 static int  s_unknown = 0;
 static bool s_session = false;
+static char s_cur_book[WB_NAME_MAX];   /*!< 当前会话用的词书名，写历史用 */
+
+/* ===================== 学习历史 ===================== */
+
+static const char *words_root(void);   /* 定义在下面 */
+
+/**
+ * 每次会话往 words/history.txt 追加一行：
+ *   时间 \t 词书名 \t 词数 \t 认识 \t 不认识 \t 完成/退出
+ *
+ * 每词的对错次数另有 progress 文件长期保存，这里记的是「每次学习」的流水，
+ * 方便回头看出"哪天学了哪本书、结果如何"。
+ */
+static void history_append(bool complete)
+{
+    if (s_sess_n <= 0) {
+        return;
+    }
+
+    char path[192];
+    snprintf(path, sizeof(path), "%s/history.txt", words_root());
+
+    FILE *fp = fopen(path, "a");
+    if (fp == NULL) {
+        return;
+    }
+
+    time_t now = time(NULL);
+    struct tm tm_now;
+    localtime_r(&now, &tm_now);
+    char ts[24];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M", &tm_now);
+
+    fprintf(fp, "%s\t%s\t%d词\t认识%d\t不认识%d\t%s\n",
+            ts,
+            (s_cur_book[0] != '\0') ? s_cur_book : "-",
+            s_sess_n, s_known, s_unknown,
+            complete ? "完成" : "退出");
+    fclose(fp);
+}
 
 /* ===================== 小工具 ===================== */
 
@@ -461,6 +504,8 @@ static bool sess_has(const char *word)
 
 static void sess_reset(void)
 {
+    free(s_sess);
+    s_sess = NULL;
     s_sess_n = 0;
     s_sess_pos = 0;
     s_known = 0;
@@ -471,11 +516,25 @@ static void sess_reset(void)
 
 static void sess_shuffle_pick(int count)
 {
-    if (count > WB_UNIT_WORD_MAX) {
-        count = WB_UNIT_WORD_MAX;
+    /* count <= 0 表示「选中的词全部过一遍」：
+     * 一轮学习不该只随机抽 20 个，没抽到的词永远学不到。 */
+    if (count <= 0) {
+        count = s_pool_n;
     }
     if (count > s_pool_n) {
         count = s_pool_n;
+    }
+    if (count <= 0) {
+        s_session = false;
+        return;
+    }
+
+    /* 按实际词数分配会话表（几百词也就十几 KB，走 PSRAM） */
+    s_sess = calloc((size_t)count, sizeof(*s_sess));
+    if (s_sess == NULL) {
+        ESP_LOGE(TAG, "会话表分配失败（%d 词）", count);
+        s_session = false;
+        return;
     }
 
     /* 从带重复权重的池子里随机抽，去重后进会话 */
@@ -506,9 +565,6 @@ static void sess_shuffle_pick(int count)
 
 esp_err_t srv_wordbook_start_units(int book, const bool *unit_sel, int count)
 {
-    if (count <= 0) {
-        count = 20;
-    }
     if (srv_wordbook_init() != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -518,6 +574,9 @@ esp_err_t srv_wordbook_start_units(int book, const bool *unit_sel, int count)
 
     sess_reset();
     prog_load();
+
+    /* 记下词书名，会话结束时写历史 */
+    snprintf(s_cur_book, sizeof(s_cur_book), "%s", s_books[book].name);
 
     char path[160];
     char line[WB_NAME_MAX + 4];
@@ -570,15 +629,15 @@ esp_err_t srv_wordbook_start_units(int book, const bool *unit_sel, int count)
 
 esp_err_t srv_wordbook_start_wrong(int count)
 {
-    if (count <= 0) {
-        count = 20;
-    }
     if (srv_wordbook_init() != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
 
     sess_reset();
     prog_load();
+
+    /* 错词复习可能横跨多本书，历史里就记成 "-" */
+    s_cur_book[0] = '\0';
 
     for (int i = 0; i < s_prog_n; i++) {
         if (s_prog[i].wrong > 0) {
@@ -652,6 +711,7 @@ void srv_wordbook_answer(bool known)
     s_sess_pos++;
     if (s_sess_pos >= s_sess_n) {
         prog_save();
+        history_append(true);      /* 本轮全部过完，记一笔 */
         s_session = false;
         ESP_LOGI(TAG, "学习结束：认识 %d / 不认识 %d", s_known, s_unknown);
     }
@@ -661,6 +721,7 @@ void srv_wordbook_stop(void)
 {
     if (s_session) {
         prog_save();
+        history_append(false);     /* 中途退出也记一笔（标「退出」） */
     }
     sess_reset();
     /* 池子按需扩容的，退出会话就还回去（最多 160KB PSRAM） */
