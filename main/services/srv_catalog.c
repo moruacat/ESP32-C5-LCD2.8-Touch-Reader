@@ -343,7 +343,11 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
     char books_dir[64];
     snprintf(books_dir, sizeof(books_dir), "%s/books", srv_sd_mount_point());
 
-    char dir[96];
+    /* 目录/文件缓冲要容得下最长书名（SRV_CATALOG_NAME_MAX = 192 字节）：
+     * 64（挂载点+/books）+ 1 + 192 + 4（.ebf）+ 余量 ≈ 280，
+     * 文件名再多 chapter.N.ebfl 的约 20 字节。留 320/384 足够，
+     * 也更不容易被 -Werror=format-truncation 拦下。 */
+    char dir[320];
     snprintf(dir, sizeof(dir), "%s/%s.ebf", books_dir, name);
 
     /* 已经下过前 N 章、服务端又加了新章时，只补新增部分 ——
@@ -369,7 +373,7 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
     }
 
     char url[192];
-    char path[128];
+    char path[384];
 
     /* ---- 先下正文章节，最后才更新元数据 ----
      * 顺序很重要：data.ebfl 里的 chapters 是固件判断"这本书有多少章"的依据。
@@ -435,7 +439,7 @@ static int local_chapters(const srv_catalog_book_t *book)
     char name[SRV_CATALOG_NAME_MAX];
     safe_name(book->title, name, sizeof(name));
 
-    char path[96];
+    char path[320];
     snprintf(path, sizeof(path), "%s/books/%s.ebf/data.ebfl",
              srv_sd_mount_point(), name);
 
