@@ -52,11 +52,21 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
                                srv_catalog_progress_cb_t progress_cb);
 
 /**
- * @brief 这本书是否已经下载到 SD（/books/<书名>.ebf/data.ebfl 存在）
- *
- * 批量下载用它跳过已下载的书。
+ * @brief 本地下载状态
  */
-bool srv_catalog_is_downloaded(const srv_catalog_book_t *book);
+typedef enum {
+    SRV_CATALOG_NONE = 0,      /*!< SD 上没有这本书 */
+    SRV_CATALOG_UP_TO_DATE,    /*!< 已下载且章节数与服务端一致 */
+    SRV_CATALOG_OUTDATED,      /*!< 已下载但服务端章节数变了（有更新） */
+} srv_catalog_state_t;
+
+/**
+ * @brief 查这本书在 SD 上的状态
+ *
+ * 判断依据是本地 data.ebfl 里的 `<book chapters="N">` 与服务端书单的
+ * chapters 是否一致 —— 章节数变了就认为有更新（番茄追更只追加，够用）。
+ */
+srv_catalog_state_t srv_catalog_state(const srv_catalog_book_t *book);
 
 #ifdef __cplusplus
 }

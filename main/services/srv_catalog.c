@@ -342,8 +342,16 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
     char dir[96];
     snprintf(dir, sizeof(dir), "%s/%s.ebf", books_dir, name);
 
-    /* 覆盖同名旧版本：否则章节数变少时会留下多余文件 */
-    (void)srv_fs_remove_tree(dir);
+    /* 已经下过前 N 章、服务端又加了新章时，只补新增部分 ——
+     * 追更一本书不该把前面几百章重下一遍（也免得覆盖掉阅读进度）。 */
+    const int local = local_chapters(book);
+    const bool incremental = (local > 0 && local < book->chapters);
+    const int from = incremental ? (local + 1) : 1;
+
+    if (!incremental) {
+        /* 全新下载，或本地章节数比服务端多（书被换过）→ 清掉重来 */
+        (void)srv_fs_remove_tree(dir);
+    }
     (void)srv_fs_mkdir(books_dir);      /* 已存在会返回错误，无妨 */
     esp_err_t err = srv_fs_mkdir(dir);
     if (err != ESP_OK) {
@@ -351,10 +359,35 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
         return err;
     }
 
+    if (incremental) {
+        ESP_LOGI(TAG, "%s：本地已有 %d 章，只补 %d-%d 章",
+                 book->title, local, from, book->chapters);
+    }
+
     char url[192];
     char path[128];
 
-    /* ---- 元数据三件套 ---- */
+    /* ---- 先下正文章节，最后才更新元数据 ----
+     * 顺序很重要：data.ebfl 里的 chapters 是固件判断"这本书有多少章"的依据。
+     * 如果先更新它、章节却没下完，书架会显示 N 章但点进去缺文件。
+     * 放到最后，中途失败时本地的旧 data.ebfl 仍然和旧章节自洽。 */
+    for (int i = from; i <= book->chapters; i++) {
+        snprintf(url, sizeof(url), "%s/api/books/%lld/chapter/%d",
+                 base, (long long)book->id, i);
+        snprintf(path, sizeof(path), "%s/chapter.%d.ebfl", dir, i);
+
+        err = http_get_to_file(url, path, META_MAX_BYTES);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "第 %d/%d 章下载失败", i, book->chapters);
+            goto fail;
+        }
+
+        if (progress_cb != NULL) {
+            progress_cb(i, book->chapters);
+        }
+    }
+
+    /* ---- 元数据三件套（章节全部就绪后再写） ---- */
     snprintf(url, sizeof(url), "%s/api/books/%lld/data", base, (long long)book->id);
     snprintf(path, sizeof(path), "%s/data.ebfl", dir);
     if (http_get_to_file(url, path, META_MAX_BYTES) != ESP_OK) {
@@ -375,36 +408,24 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
         (void)srv_fs_remove(path);
     }
 
-    /* ---- 逐章 ---- */
-    for (int i = 1; i <= book->chapters; i++) {
-        snprintf(url, sizeof(url), "%s/api/books/%lld/chapter/%d",
-                 base, (long long)book->id, i);
-        snprintf(path, sizeof(path), "%s/chapter.%d.ebfl", dir, i);
-
-        err = http_get_to_file(url, path, META_MAX_BYTES);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "第 %d/%d 章下载失败", i, book->chapters);
-            goto fail;
-        }
-
-        if (progress_cb != NULL) {
-            progress_cb(i, book->chapters);
-        }
-    }
-
-    ESP_LOGI(TAG, "下载完成：%s（%d 章）", book->title, book->chapters);
+    ESP_LOGI(TAG, "下载完成：%s（%d 章%s）", book->title, book->chapters,
+             incremental ? "，增量补章" : "");
     return ESP_OK;
 
 fail:
-    /* 留半本书在 /books 里会被书架扫出来，点进去就是缺章 —— 直接清掉 */
-    (void)srv_fs_remove_tree(dir);
+    /* 全新下载失败：不留半本书（书架会扫出缺章的书）。
+     * 增量失败：保留旧章节和旧 data.ebfl，它们仍然自洽，下次重试即可。 */
+    if (!incremental) {
+        (void)srv_fs_remove_tree(dir);
+    }
     return err != ESP_OK ? err : ESP_FAIL;
 }
 
-bool srv_catalog_is_downloaded(const srv_catalog_book_t *book)
+/** 读本地 data.ebfl 里的章节数；0 表示没下载或读不出。 */
+static int local_chapters(const srv_catalog_book_t *book)
 {
     if (book == NULL || !srv_sd_is_mounted()) {
-        return false;
+        return 0;
     }
 
     char name[SRV_CATALOG_NAME_MAX];
@@ -415,5 +436,33 @@ bool srv_catalog_is_downloaded(const srv_catalog_book_t *book)
              srv_sd_mount_point(), name);
 
     srv_fs_entry_t st;
-    return srv_fs_stat(path, &st) == ESP_OK;
+    if (srv_fs_stat(path, &st) != ESP_OK) {
+        return 0;
+    }
+
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL) {
+        return 0;
+    }
+    char buf[512];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    fclose(fp);
+    buf[n] = '\0';
+
+    const char *p = strstr(buf, "chapters=\"");
+    if (p == NULL) {
+        return 0;
+    }
+    p += strlen("chapters=\"");
+    return atoi(p);
+}
+
+srv_catalog_state_t srv_catalog_state(const srv_catalog_book_t *book)
+{
+    const int local = local_chapters(book);
+    if (local <= 0) {
+        return SRV_CATALOG_NONE;
+    }
+    return (local == book->chapters) ? SRV_CATALOG_UP_TO_DATE
+                                     : SRV_CATALOG_OUTDATED;
 }

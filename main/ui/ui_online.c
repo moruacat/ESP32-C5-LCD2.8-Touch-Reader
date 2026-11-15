@@ -145,8 +145,8 @@ static void batch_task(void *arg)
     int fail = 0;
 
     for (int i = 0; i < s_book_count; i++) {
-        if (srv_catalog_is_downloaded(&s_books[i])) {
-            continue;               /* 已下载的跳过 */
+        if (srv_catalog_state(&s_books[i]) == SRV_CATALOG_UP_TO_DATE) {
+            continue;               /* 已是最新的跳过，有更新的仍会下 */
         }
         esp_err_t err = srv_catalog_download(&s_books[i], batch_progress);
         if (err == ESP_OK) {
@@ -182,7 +182,7 @@ static void on_batch_confirm(void *arg)
 
     s_batch_total = 0;
     for (int i = 0; i < s_book_count; i++) {
-        if (!srv_catalog_is_downloaded(&s_books[i])) {
+        if (srv_catalog_state(&s_books[i]) != SRV_CATALOG_UP_TO_DATE) {
             s_batch_total++;
         }
     }
@@ -216,18 +216,18 @@ static void on_download_all(lv_event_t *e)
 
     int pending = 0;
     for (int i = 0; i < s_book_count; i++) {
-        if (!srv_catalog_is_downloaded(&s_books[i])) {
+        if (srv_catalog_state(&s_books[i]) != SRV_CATALOG_UP_TO_DATE) {
             pending++;
         }
     }
     if (pending == 0) {
-        lv_label_set_text(s_hint_lb, "书单里的都已经下载了");
+        lv_label_set_text(s_hint_lb, "书单里的都已经是最新了");
         lv_obj_set_style_text_color(s_hint_lb, UI_COLOR_TEXT_DIM, 0);
         return;
     }
 
     char note[96];
-    snprintf(note, sizeof(note), "还有 %d 本未下载，确认全部下载到 SD？", pending);
+    snprintf(note, sizeof(note), "还有 %d 本未下载或有更新，确认全部下载？", pending);
     ui_dialog_confirm("全部下载？", note, "下载", on_batch_confirm, NULL);
 }
 
@@ -325,6 +325,7 @@ static void on_book_clicked(lv_event_t *e)
 static void add_book_row(int idx)
 {
     const srv_catalog_book_t *b = &s_books[idx];
+    const srv_catalog_state_t st = srv_catalog_state(b);
 
     lv_obj_t *row = ui_row_create(s_list,
                                   (lv_coord_t)(lv_obj_get_child_count(s_list) * 44),
@@ -335,11 +336,21 @@ static void add_book_row(int idx)
     ui_add_click_feedback(row);
     lv_obj_add_event_cb(row, on_book_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
 
-    char info[32];
-    snprintf(info, sizeof(info), "%d 章", b->chapters);
-    lv_obj_t *val = ui_row_value_create(row, -12, 90);
+    char info[48];
+    if (st == SRV_CATALOG_UP_TO_DATE) {
+        snprintf(info, sizeof(info), "%d 章 · 已下载", b->chapters);
+    } else if (st == SRV_CATALOG_OUTDATED) {
+        snprintf(info, sizeof(info), "%d 章 · 有更新", b->chapters);
+    } else {
+        snprintf(info, sizeof(info), "%d 章", b->chapters);
+    }
+    lv_obj_t *val = ui_row_value_create(row, -12, 116);
     lv_label_set_text(val, info);
-    lv_obj_set_style_text_color(val, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_color(val,
+                                st == SRV_CATALOG_OUTDATED ? UI_COLOR_OK :
+                                st == SRV_CATALOG_UP_TO_DATE ? UI_COLOR_TEXT_DIM :
+                                                               UI_COLOR_TEXT,
+                                0);
 }
 
 static void fetch_task(void *arg)
