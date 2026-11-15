@@ -1,0 +1,4 @@
+bottle
+eraser
+key
+thing

@@ -1,0 +1,4 @@
+name=人教版英语七年级上册
+units=10
+words=280
+unit_size=0

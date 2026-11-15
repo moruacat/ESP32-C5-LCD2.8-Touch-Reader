@@ -30,8 +30,8 @@ OUT_ROOT = os.path.join(ROOT, "words")
 
 SECTION_START = "Vocabulary in Each Unit"
 SECTION_ENDS = ("Vocabulary A-Z", "Vocabulary from Primary School", "Irregular Verbs")
-
-UNIT_RE = re.compile(r"^Unit\s+(\d+)\s*$", re.IGNORECASE)
+# 单元标题可能是 "Unit 1"，也可能是 "Starter Unit 1"（七上/七下前三个单元）
+UNIT_RE = re.compile(r"^(?:Starter\s+)?Unit\s+(\d+)\s*$", re.IGNORECASE)
 PAGE_NO_RE = re.compile(r"\s*p\.\s*\d+\s*$")
 
 SKIP_PREFIX = (
@@ -97,20 +97,18 @@ def clean_entry(line):
 
 
 def parse_units(pages, start_page, start_line, end_marker_seen):
-    """按 Unit N 切分；返回 [(unit_no, [word...]), ...]
+    """按单元标题切分；返回 [(unit_no, [word...]), ...]
 
-    两道保险防止把书末的 Vocabulary A-Z 总表也算进来：
-      - Unit 编号必须递增，出现「不递增的 Unit N」就停（总表后面按七上/七下分组，
-        会再出现 Unit 1/3/4/6）
-      - 单单元词数上限 MAX_PER_UNIT，超出的词条直接忽略（课本单元生词最多六七十）
+    单元编号在 Starter Unit 和 Unit 之间会重排（Starter 1/2/3 之后又从 Unit 1
+    开始），所以不能用"编号必须递增"来判断附录。改用两道别的保险：
+      - SECTION_ENDS 里的附录标题直接收手；
+      - 单单元词数上限 MAX_PER_UNIT（课本单元生词最多六七十）；
+      - Vocabulary A-Z 总表以单字母词条 "a" 开头，出现 "a" 且已收很多词就停。
     """
     MAX_PER_UNIT = 120
     units = []
     cur_no = None
     cur_words = []
-    last_no = 0
-    prev_word = ""
-    asc_run = 0
 
     for pi in range(start_page, len(pages)):
         lines = pages[pi].splitlines()
@@ -125,17 +123,9 @@ def parse_units(pages, start_page, start_line, end_marker_seen):
             if m:
                 no = int(m.group(1))
                 if cur_no is not None:
-                    if no <= last_no:       # 编号不递增 → 进入附录总表
-                        units.append((cur_no, cur_words))
-                        cur_no = None
-                        end_marker_seen[0] = True
-                        break
                     units.append((cur_no, cur_words))
-                    last_no = cur_no
                 cur_no = no
                 cur_words = []
-                prev_word = ""
-                asc_run = 0
                 continue
 
             if len(cur_words) >= MAX_PER_UNIT:
@@ -147,16 +137,6 @@ def parse_units(pages, start_page, start_line, end_marker_seen):
 
                 # Vocabulary A-Z 总表以单字母词条 "a" 开头；生词表不会把 a 当生词
                 if lw == "a" and len(cur_words) > 20:
-                    end_marker_seen[0] = True
-                    break
-
-                # 兜底：总表是严格字母升序，连续 12 个升序也收手
-                if prev_word and lw >= prev_word:
-                    asc_run += 1
-                else:
-                    asc_run = 0
-                prev_word = lw
-                if asc_run >= 12:
                     end_marker_seen[0] = True
                     break
 

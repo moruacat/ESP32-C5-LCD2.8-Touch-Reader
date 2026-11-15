@@ -1,0 +1,54 @@
+rule
+order
+follow
+late for
+arrive
+hallway
+uniform
+litter
+polite
+treat
+respect
+if
+jacket
+have to
+everything
+lend
+sweet
+snack
+of course
+mobile
+mobile phone
+turn off
+queue
+feed
+leave
+absent
+shh
+quietly
+put on
+belt
+noise
+unhappy
+dr
+either
+practise
+hang
+hang out
+weekday
+awful
+become
+better
+person
+focus
+focus on
+build
+spirit
+think about
+relax
+advice
+understand
+untidy
+mary
+anne
+eric
