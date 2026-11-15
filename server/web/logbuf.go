@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const logKeep = 400
+const logKeep = 1200
 
 // LogBuffer 记住最近若干行日志，供管理页轮询显示。
 // 实现 io.Writer，直接挂到 log.SetOutput 上即可。
