@@ -524,19 +524,21 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
      *
      * 顺序仍然重要：data.ebfl 里的 chapters 是固件判断总章数的依据，
      * 先写它而章节没下全，书架会显示 N 章但点进去缺文件。 */
-    for (int base = from; base <= book->chapters; base += DL_BATCH) {
-        int hi = base + DL_BATCH - 1;
+    for (int chunk = from; chunk <= book->chapters; chunk += DL_BATCH) {
+        int hi = chunk + DL_BATCH - 1;
         if (hi > book->chapters) {
             hi = book->chapters;
         }
 
+        /* 注意：这里的起点变量不能叫 base —— 外层 base 是 URL 基址，
+         * 重名会把 %s 收到 int，CI 的 -Werror=format 会直接拦下。 */
         snprintf(url, sizeof(url), "%s/api/books/%lld/batch?from=%d&to=%d",
-                 base, (long long)book->id, base, hi);
+                 base, (long long)book->id, chunk, hi);
 
         int blen = 0;
         char *buf = http_get_buf(url, 4 * 1024 * 1024, &blen);
         if (buf == NULL) {
-            ESP_LOGE(TAG, "第 %d-%d 章批量下载失败", base, hi);
+            ESP_LOGE(TAG, "第 %d-%d 章批量下载失败", chunk, hi);
             err = ESP_FAIL;
             goto fail;
         }
@@ -545,11 +547,11 @@ esp_err_t srv_catalog_download(const srv_catalog_book_t *book,
         err = parse_batch(buf, blen, dir, &written);
         free(buf);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "第 %d-%d 章解析/写盘失败", base, hi);
+            ESP_LOGE(TAG, "第 %d-%d 章解析/写盘失败", chunk, hi);
             goto fail;
         }
         if (written == 0) {
-            ESP_LOGE(TAG, "第 %d-%d 章批量响应里没有章节", base, hi);
+            ESP_LOGE(TAG, "第 %d-%d 章批量响应里没有章节", chunk, hi);
             err = ESP_FAIL;
             goto fail;
         }
