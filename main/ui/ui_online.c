@@ -473,16 +473,19 @@ void ui_online_create(lv_obj_t *root)
     lv_label_set_text(s_hint_lb, "点「发现」在同一 WiFi 下搜索");
     lv_obj_set_pos(s_hint_lb, 10, top + 88);
 
-    /* ---- 书单（占据剩余高度） ---- */
+    /* ---- 书单（占据剩余高度，可竖向滚动） ---- */
     const lv_coord_t list_y = top + 118;
     lv_obj_t *list = lv_obj_create(root);
-    lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(list, ui_scr_w(), ui_scr_h() - list_y);
     lv_obj_set_pos(list, 0, list_y);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_pad_all(list, 0, 0);
+    /* 这里必须是可滚动容器：书单条目按绝对 y 摆在它里面，
+     * 条目一多就超出一屏，禁掉 SCROLLABLE 会永远只看到前几本。 */
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
     s_list = list;
 
     lv_obj_add_event_cb(root, online_root_del_cb, LV_EVENT_DELETE, NULL);
