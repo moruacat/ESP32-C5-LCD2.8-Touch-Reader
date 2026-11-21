@@ -551,7 +551,7 @@ python tools\gen_dict.py
 | 录音机不能回放、播放器不能放 WAV | WAV 改走裸 PCM 直通（simple_dec 的 WAV 解码器要求 RIFF 头，而播放器从 data 块喂，必失败）；新增 `srv_player_play_file()`；录音机页加 `/record` 列表与试听 | `srv_player.[ch]`、`srv_recorder.[ch]`、`ui/ui_recorder.c` |
 | 段距非整十不生效 | 设置页段距改成 10 一档（按「格」显示），阅读器仍按 10 折算空行 | `ui/ui_set_read.c`、`ui/ui_reader.c` |
 | 去掉 SD 弹出提示里的书架警告 | 关于页确认框文案改为「弹出后 SD 卡将无法读写」 | `ui/ui_set_about.c` |
-| 多加字体大小 | 阅读器 14/16/18/20/22px：14 内嵌，其余由 `tools/gen_read_fonts.py` 生成并打进 11MB `font` 分区（SD `/fonts` 优先），`ui_font` 按需加载/释放 | `ui/ui_font.[ch]`、`ui_set_read.c`、`ui_reader.c`、`tools/gen_read_fonts.py`、`partitions.csv` |
+| 多加字体大小 | 阅读器 14/16/18/20/22px：14 内嵌，其余由 `tools/gen_read_fonts.py` 生成 **2bpp** 并打进 6MB `font` 分区（SD `/fonts` 优先、失败回退 Flash），`ui_font` 按需加载/释放 | `ui/ui_font.[ch]`、`ui_set_read.c`、`ui_reader.c`、`tools/gen_read_fonts.py`、`partitions.csv` |
 | 单词放进 Flash | **最终改为不放**：完整词库 27 万词太大，词库仍只放 SD；Flash 剩余空间改为字库。`tools/build_flash_dict.py` 留作精简备份工具 | `partitions.csv`、`srv_dict.c`、`tools/build_flash_dict.py` |
 | 设置保存到分区、防止坏文件无限重启 | 设置改存 NVS（blob + magic/版本/长度/CRC32）；读坏回默认；旧 `/config.dat` 首次导入一次 | `srv_config.[ch]` |
 | 版本 1.5.4 | 根 CMakeLists `PROJECT_VER` | `CMakeLists.txt` |
@@ -567,7 +567,7 @@ nvs 0x9000 24KB | otadata | phy_init
 factory 0x20000 6MB
 ota_0   0x620000 6MB
 ota_1   0xC20000 6MB
-font    0x1220000 11MB (SPIFFS, 16/18/20/22px 阅读字库)
+font    0x1220000 6MB (SPIFFS, 16/18/20/22px 2bpp 阅读字库)
 ```
 
 - 原 `fonts`(4MB) 与 `storage`(5MB) 已删除；它们此前没有被代码使用。
@@ -578,12 +578,18 @@ font    0x1220000 11MB (SPIFFS, 16/18/20/22px 阅读字库)
 
 ### 13.3 字体与 PSRAM
 
-- 16px = 1.74MB，18px ≈ 2.1MB，20px = 2.62MB，22px ≈ 3.1MB；四档约 9.6MB，打进 11MB 的 `font` 分区。
+- 2bpp：16px = 0.91MB，18px = 1.12MB，20px = 1.33MB，22px = 1.56MB；四档约 4.93MB，打进 6MB 的 `font` 分区。
+- 为什么不是 4bpp：8MB PSRAM 里 `SPIRAM_XIP_FROM_PSRAM` 把代码/只读数据放在 PSRAM，启动日志只剩
+  `Adding pool of 3648K`，系统跑起来后空闲约 2.5MB；4bpp 的 20px 字库文件 2.62MB，
+  加上 LVGL 内部一份，峰值 5MB+，必然回退 14px。
+- 真机用 `lv_binfont_create("S:/...")` 直接从文件加载（POSIX fs），不再先 malloc 整份文件；
+  峰值约等于文件大小（20px 1.33MB）。
+- 查找顺序：SD `/fonts/font_ui_<px>.bin` → Flash `/fontflash/font_ui_<px>.bin`。
+  SD 上有旧 4bpp 字库（太大）时，加载失败会自动改用 Flash 的 2bpp，不用手动删卡。
 - `ui_read_font_get()` 同时只缓存一档，退出阅读器
   （`app_navigator_current() != PAGE_READER`）时释放。
-- 查找顺序：SD `/fonts/font_ui_<px>.bin` → Flash `/fontflash/font_ui_<px>.bin`。
-- 加载路径先读整文件到 PSRAM 再 `lv_binfont_create_from_buffer()`，峰值约 2 倍文件大小。
-  真机上 PSRAM 吃紧时可能回退 14px（日志 `ui_font: 字库缓冲分配失败`），这是有意行为。
+- 加载路径先读整文件到 PSRAM 再 `lv_binfont_create_from_buffer()`（仅模拟器）；真机走
+  POSIX 文件加载，PSRAM 吃紧时回退 14px（日志 `ui_font: PSRAM 余量不足`）。
 - 模拟器的 `lv_conf.h` 已打开 `LV_USE_FS_MEMFS`（65），与固件 sdkconfig 对齐。
 
 ### 13.4 词库
@@ -618,7 +624,7 @@ MOTION <seq> <t_ms> <qw> <qx> <qy> <qz> <ax> <ay> <az> <gx> <gy> <gz>
    ```
 
    生成 `font/font_ui_{16,18,20,22}.bin`、`flash_assets/fonts/` 和 `build/font.bin`
-   （11MB SPIFFS 镜像）。CI 面板烧录时自动检测 `build/font.bin` 并追加到
+   （6MB SPIFFS 镜像）。CI 面板烧录时自动检测 `build/font.bin` 并追加到
    `0x1220000`（确认框会显示「阅读字库：有/无」）。CI artifact 本身不含它，
    所以**不用 build.ps1 也能刷完整字库**。
 3. 首次刷入新分区表后（即使没带 font.bin）分区表已经生效，之后只需重烧

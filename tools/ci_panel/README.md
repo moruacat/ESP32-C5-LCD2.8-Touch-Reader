@@ -59,13 +59,13 @@ python tools/gen_read_fonts.py
 
 默认会生成：
 
-- `font/font_ui_{16,18,20,22}.bin`：四档字库
+- `font/font_ui_{16,18,20,22}.bin`：四档 2bpp 字库（共约 4.9MB）
 - `flash_assets/fonts/`：打包输入
-- `build/font.bin`：11MB SPIFFS 镜像（font 分区内容）
+- `build/font.bin`：6MB SPIFFS 镜像（font 分区内容）
 
 烧录时面板会优先用 artifact 里的 `font.bin`，没有就自动找项目根目录的
 `build/font.bin`。**只有勾选「同时烧录阅读字库」才会写 font 分区**，默认不勾选，
-这样日常刷 app 不会多传 11MB。确认框会显示烧录范围与字库状态。
+这样日常刷 app 不会多传 6MB。确认框会显示烧录范围与字库状态。
 
 另外新增「完整烧录」勾选项：
 

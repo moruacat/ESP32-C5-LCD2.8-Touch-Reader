@@ -113,7 +113,7 @@ try {
             $flashArgs += @("0xf000", $otadata)
         }
         $flashArgs += @("0x20000", $appBin)
-        # font 分区偏移与 partitions.csv 的 `font, data, spiffs, 0x1220000, 0xB00000` 一致
+        # font 分区偏移与 partitions.csv 的 `font, data, spiffs, 0x1220000, 0x600000` 一致
         if (Test-Path $fontBin) {
             $flashArgs += @("0x1220000", $fontBin)
         }

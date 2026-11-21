@@ -37,8 +37,10 @@ OUT_DIR = os.path.join(ROOT, "font")
 ASSET_DIR = os.path.join(ROOT, "flash_assets", "fonts")
 DEFAULT_IMAGE = os.path.join(ROOT, "build", "font.bin")
 SIZES = (16, 18, 20, 22)
-BPP = 4
-DEFAULT_PARTITION_SIZE = 0xB00000   # 与 partitions.csv 的 font 分区一致
+# 2bpp：PSRAM 里只有约 2.5MB 空闲（代码 XIP 占了 4.4MB），4bpp 的 20px
+# 字库峰值要 5MB+，必然回退 14px。2bpp 体积约一半，20px 约 1.3MB。
+BPP = 2
+DEFAULT_PARTITION_SIZE = 0x600000   # 与 partitions.csv 的 font 分区一致（6MB）
 
 HANZI_TTF = os.path.join(ROOT, "font", "HarmonyOS_Sans_SC_Medium.ttf")
 

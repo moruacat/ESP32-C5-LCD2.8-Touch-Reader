@@ -124,7 +124,7 @@
 factory  6 MB
 ota_0    6 MB
 ota_1    6 MB
-font     11 MB SPIFFS（16/18/20/22px 阅读字库，构建时生成）
+font     6 MB SPIFFS（16/18/20/22px 阅读字库，2bpp，构建时生成）
 ```
 
 > 设置不再存 SD 卡：整份配置打包写进 Flash 的 `nvs` 分区（带 magic / 版本 / 长度 / CRC32 校验），
@@ -164,7 +164,7 @@ build/font.bin          # flash_assets/fonts 存在时才生成
 
 > 脚本会导入 ESP-IDF 环境，并使用 `idf.py --no-ccache`。沙箱 / 杀毒软件环境下 ccache 可能卡死，不建议省略 `--no-ccache`。
 >
-> **1.5.4 改了分区表**（新增 11MB 的 `font` 字库分区），第一次必须完整烧录一次；
+> **1.5.4 改了分区表**（新增 6MB 的 `font` 字库分区），第一次必须完整烧录一次；
 > 之后只烧 app（`-AppOnly`）即可。OTA 也不会更新分区表。
 
 ### 方式二：手动 IDF 命令
@@ -195,7 +195,7 @@ python tools/gen_read_fonts.py
 ```
 
 它会生成 `font/font_ui_{16,18,20,22}.bin`、`flash_assets/fonts/` 与
-`build/font.bin`（11MB SPIFFS 镜像）。用 `tools/ci_panel` 烧录 CI 固件时，面板会自动
+`build/font.bin`（6MB SPIFFS 镜像）。用 `tools/ci_panel` 烧录 CI 固件时，面板会自动
 检测并追加 `build/font.bin` 到 `0x1220000`；没有这个文件时只烧固件，字号回退 SD
 `/fonts` 或内嵌的 14px。词库仍然只放 SD 卡，不参与烧录。
 
@@ -285,7 +285,7 @@ SD/
 | `tools/check_dict.py` | 检查词典格式、排序与索引 |
 | `tools/dict_probe.py` | PC 端复刻设备查词算法 |
 | `tools/gen_font.py` | 根据汉字表重新生成内置 14px 字体 |
-| `tools/gen_read_fonts.py` | 生成 16/18/20/22px 字库并打包 `build/font.bin` |
+| `tools/gen_read_fonts.py` | 生成 16/18/20/22px 2bpp 字库并打包 `build/font.bin` |
 | `tools/gen_lunar_table.py` | 重新生成农历数据表（1900–2099） |
 | `tools/png2lvgl.py` | PNG 图标转换为 LVGL C 数组 |
 | `tools/motion3d/` | 电脑端姿态 3D 显示（UDP + PyQt5）与 STEP→OBJ 转换 |
@@ -379,7 +379,7 @@ sim/                        # PC 模拟器（本地，不纳入 Git）
 - 真机长跑回归仍需覆盖：内存水位、SD 热插拔、音乐 + 翻页、AI 与音频通道切换。
 - 新增功能前需要关注 app 分区余量（factory 6 MB）。
 - **改分区表后必须完整烧录一次**（CI 面板烧分区表 + `build/font.bin`；`build.ps1` 同样会带）；局域网 OTA 只更新 app，不会带新分区表和字库。
-- 16/18/20/22px 字库默认在 Flash 的 `font` 分区；SD 卡 `/fonts` 里有同名文件时优先用 SD。两者都没有时只有 14px。
+- 字库是 **2bpp**：8MB PSRAM 里代码 XIP 占了 4.4MB，只剩约 2.5MB；4bpp 的 20px 字库加载峰值 5MB 装不下。SD 卡 `/fonts` 优先；SD 上的字库太大/损坏时会自动改用 Flash 里的 2bpp；两者都没有时只有 14px。
 - 词库只从 SD 卡 `/dict` 读取；没插 SD 时查词不可用。
 - CI 构建的 artifact 不含字库镜像；用 `python tools/gen_read_fonts.py` 本地生成
   `build/font.bin`，CI 面板烧录时会自动带上。
