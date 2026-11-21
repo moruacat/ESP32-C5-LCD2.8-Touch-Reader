@@ -104,7 +104,10 @@ static void list_rebuild(void)
     lv_obj_clean(s_list);
 
     const int n = srv_recorder_scan_files();
-    const lv_coord_t w = lv_obj_get_width(s_list) - 4;
+    /* 列表宽 = 屏宽 - 16（左右各 8），行再左右各留 2。
+     * 不要用 lv_obj_get_width(s_list)：页面刚建好、布局还没算时它返回 0，
+     * 算出来是负宽度，行对象会直接不可见（日志说有文件、界面一片空白）。 */
+    const lv_coord_t w = ui_scr_w() - 16 - 4;
     s_shown_sel = s_sel;
 
     if (n <= 0) {
