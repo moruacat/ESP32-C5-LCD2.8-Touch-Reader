@@ -37,6 +37,92 @@ bool ui_sleep_is_on(void)
     return s_on;
 }
 
+/* ===================== 背光过渡 =====================
+ *
+ * CH32V003 的背光 PWM 是 8 位的（0~255），百分比接口只有 101 档；
+ * 这里直接用原始占空比，把 256 级全用上。曲线：
+ *   - 熄屏/变暗：二次曲线，越接近全黑每步变化越小（暗部慢）；
+ *   - 唤醒/变亮：线性，第一步不会从 0 直接跳到很亮。
+ * 低亮度下 1/255 是硬件下限，没有做时间抖动（会看到闪烁）。
+ */
+#define FADE_STEPS      45
+#define FADE_DIM_MS     260
+#define FADE_SLEEP_MS   520
+#define FADE_WAKE_MS    380
+
+static lv_timer_t *s_fade_timer = NULL;
+static int s_fade_from = 0;
+static int s_fade_to   = 0;
+static int s_fade_step = 0;
+
+static int pct_to_duty(int pct)
+{
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return (pct * 255 + 50) / 100;
+}
+
+static void fade_timer_cb(lv_timer_t *t)
+{
+    s_fade_step++;
+    if (s_fade_step >= FADE_STEPS) {
+        bsp_display_backlight_set_duty(s_fade_to);
+        s_fade_timer = NULL;
+        lv_timer_delete(t);
+
+        /* 熄屏：等背光完全暗下来再盖黑层，画面是「渐暗」而不是「瞬间黑」 */
+        if (s_on && s_layer != NULL && lv_obj_has_flag(s_layer, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    const int q = FADE_STEPS - s_fade_step;
+    const int den = FADE_STEPS * FADE_STEPS;
+    int numer;
+    if (s_fade_to < s_fade_from) {
+        numer = q * q;              /* 变暗：暗部慢 */
+    } else {
+        numer = q * FADE_STEPS;     /* 变亮：线性 */
+    }
+
+    int duty = s_fade_to + ((s_fade_from - s_fade_to) * numer) / den;
+    if (duty < 0) duty = 0;
+    if (duty > 255) duty = 255;
+    bsp_display_backlight_set_duty(duty);
+}
+
+/*! 在 LVGL 任务/持锁上下文里调用；从当前实际占空比开始，可打断上一次过渡 */
+static void fade_to(int duty, int ms)
+{
+    if (duty < 0) duty = 0;
+    if (duty > 255) duty = 255;
+
+    if (s_fade_timer != NULL) {
+        lv_timer_delete(s_fade_timer);
+        s_fade_timer = NULL;
+    }
+
+    const int from = bsp_display_backlight_get_duty();
+    if (from == duty) {
+        return;
+    }
+
+    int period = ms / FADE_STEPS;
+    if (period < 5) {
+        period = 5;
+    }
+
+    s_fade_from = from;
+    s_fade_to   = duty;
+    s_fade_step = 0;
+    s_fade_timer = lv_timer_create(fade_timer_cb, period, NULL);
+    if (s_fade_timer == NULL) {
+        /* 定时器创建失败就退化成直接设置，至少别停在旧亮度 */
+        bsp_display_backlight_set_duty(duty);
+    }
+}
+
 /* ===================== 自动变暗 ===================== */
 
 static bool dim_enabled(void)
@@ -157,7 +243,7 @@ static void dim_restore(void)
         return;
     }
     s_dimmed = false;
-    bsp_display_brightness_set((int)srv_config()->brightness);
+    fade_to(pct_to_duty((int)srv_config()->brightness), FADE_DIM_MS);
     ESP_LOGI(TAG, "亮度恢复 %d%%", (int)srv_config()->brightness);
 }
 
@@ -222,7 +308,7 @@ static void dim_tick(lv_timer_t *timer)
     if (dim_enabled()) {
         if (!s_dimmed && (now - s_last_act_us) >= dim_after_us()) {
             s_dimmed = true;
-            bsp_display_brightness_set(dim_brightness());
+            fade_to(pct_to_duty(dim_brightness()), FADE_DIM_MS);
             ESP_LOGI(TAG, "闲置 %d 秒，亮度降到 %d%%",
                      (int)(dim_after_us() / 1000000), dim_brightness());
         }
@@ -257,18 +343,22 @@ void ui_sleep_set(bool on)
 
     if (on) {
         /* 屏幕方向可能和初始化时不同（旋转后在别的页面里休眠），
-         * 休眠层要正好盖住当前逻辑屏幕 */
+         * 休眠层要正好盖住当前逻辑屏幕。
+         * 先不显示黑层：让画面跟着背光一起暗下去，渐暗完成后再由
+         * fade_timer_cb 盖黑层（观感是渐暗，不是瞬间黑）。 */
         lv_obj_set_size(s_layer, ui_scr_w(), ui_scr_h());
-        lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_HIDDEN);
+        fade_to(0, FADE_SLEEP_MS);
+        if (s_fade_timer == NULL) {
+            /* 本来就已经全黑，或者定时器建不出来：直接盖层 */
+            lv_obj_remove_flag(s_layer, LV_OBJ_FLAG_HIDDEN);
+        }
     } else {
         lv_obj_add_flag(s_layer, LV_OBJ_FLAG_HIDDEN);
+        fade_to(pct_to_duty((int)srv_config()->brightness), FADE_WAKE_MS);
     }
 
     bsp_display_unlock();
 
-    /* 背光是 I2C 操作，放在 LVGL 锁外面做。
-     * 亮度 0 只在这里用 —— 界面上允许调到的最低值是 UI_BRIGHTNESS_MIN。 */
-    bsp_display_brightness_set(on ? 0 : (int)srv_config()->brightness);
     ESP_LOGI(TAG, "%s", on ? "已休眠（关屏）" : "已唤醒");
 }
 

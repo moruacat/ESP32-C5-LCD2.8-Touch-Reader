@@ -22,7 +22,7 @@ typedef struct {
     const lv_image_dsc_t *icon;
     int                   step;     /*!< 每次加减的量；0 = 按字号档位循环 */
     int                   def;      /*!< 默认值（「恢复默认」用） */
-    int                   div;      /*!< 显示时除以几（段距存的是像素，按 1 格 = 10px 显示） */
+    int                   div;      /*!< 显示时除以几（目前全部是 1） */
     const char           *unit;     /*!< 数值后面的单位 */
 } read_item_t;
 
@@ -30,10 +30,8 @@ static const read_item_t s_items[] = {
     {"字号", CFG_READ_FONT_SIZE, &ic_book_open,          0, 14, 1, "px"},
     {"字距", CFG_READ_LETTER_SP, &ic_letter_spacing,     1,  0, 1, ""},
     {"行距", CFG_READ_LINE_SP,   &ic_line_spacing,       1,  6, 1, ""},
-    /* 段距用「段间空行数」实现，最小单位就是一行；所以界面也只能按整行调，
-     * 每次 10px（= 1 格 = 1 个空行）。以前步进 1、阅读器再除 10，非整十的
-     * 值会被截断，看起来就是「1~9 都不生效」。现在界面值都落在 10 的倍数上。 */
-    {"段距", CFG_READ_PARA_SP,   &ic_paragraph_spacing, 10, 0, 10, "格"},
+    /* 段距按像素调（0~40），阅读器现在按段落拆 label 渲染，1px 都生效 */
+    {"段距", CFG_READ_PARA_SP,   &ic_paragraph_spacing,  1,  0, 1, "px"},
 };
 
 #define ITEM_COUNT  (sizeof(s_items) / sizeof(s_items[0]))
@@ -80,10 +78,10 @@ static void on_step(lv_event_t *e)
     const read_item_t *it = &s_items[idx];
 
     if (it->step == 0) {
-        /* 字号：两个方向都是「切到下一个可用档位」 */
-        (void)dir;
+        /* 字号：+ 往大、- 往小；到边界循环 */
         int cur = (int)srv_config_get_int(it->key, it->def);
-        (void)srv_config_set_int(it->key, ui_read_font_next(cur), true);
+        const int next = (dir > 0) ? ui_read_font_next(cur) : ui_read_font_prev(cur);
+        (void)srv_config_set_int(it->key, next, true);
         read_refresh();
         return;
     }
@@ -127,7 +125,7 @@ static void on_reset_ok(void *arg)
 static void on_reset_click(lv_event_t *e)
 {
     (void)e;
-    ui_dialog_confirm("恢复阅读默认？", "字距/行距/段距都会回到默认值",
+    ui_dialog_confirm("恢复阅读默认？", "字号/字距/行距/段距都会回到默认值",
                       "恢复", on_reset_ok, NULL);
 }
 

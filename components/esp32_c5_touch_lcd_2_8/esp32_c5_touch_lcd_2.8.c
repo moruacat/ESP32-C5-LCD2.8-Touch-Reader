@@ -660,11 +660,28 @@ esp_err_t shtc3_init(void)
 /**************************************************************************************************
  * bk init
  **************************************************************************************************/
-static uint8_t brightness = 100;  // 默认亮度100%
+static uint8_t brightness = 100;    // 默认亮度100%（百分比缓存）
+static uint8_t brightness_duty = 255;   // CH32 背光 PWM 原始占空比（0-255）
 
 esp_err_t bsp_display_brightness_init(void)
 {
     return bsp_io_expander_init();
+}
+
+esp_err_t bsp_display_backlight_set_duty(int duty)
+{
+    if (duty > 255) duty = 255;
+    if (duty < 0) duty = 0;
+
+    brightness_duty = (uint8_t)duty;
+    brightness = (uint8_t)((duty * 100 + 127) / 255);
+    custom_io_expander_set_pwm(io_expander, brightness_duty);
+    return ESP_OK;
+}
+
+int bsp_display_backlight_get_duty(void)
+{
+    return (int)brightness_duty;
 }
 
 esp_err_t bsp_display_brightness_set(int brightness_percent)
@@ -673,8 +690,9 @@ esp_err_t bsp_display_brightness_set(int brightness_percent)
     if (brightness_percent < 0) brightness_percent = 0;
 
     brightness = (uint8_t)brightness_percent;
-    uint8_t pwm_value = (brightness_percent * 255) / 100;
-    
+    uint8_t pwm_value = (uint8_t)((brightness_percent * 255 + 50) / 100);
+
+    brightness_duty = pwm_value;
     custom_io_expander_set_pwm(io_expander, pwm_value);
     ESP_LOGI(TAG, "Backlight: %d%%", brightness_percent);
     return ESP_OK;

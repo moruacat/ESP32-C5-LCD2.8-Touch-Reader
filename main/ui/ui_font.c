@@ -129,6 +129,25 @@ int ui_read_font_next(int px)
     return 14;
 }
 
+int ui_read_font_prev(int px)
+{
+    int idx = 0;
+    for (int i = 0; i < SIZE_COUNT; i++) {
+        if (s_sizes[i] == px) {
+            idx = i;
+            break;
+        }
+    }
+    for (int i = 1; i <= SIZE_COUNT; i++) {
+        const int pos = (idx - i + SIZE_COUNT * 2) % SIZE_COUNT;
+        const int cand = s_sizes[pos];
+        if (ui_read_font_available(cand)) {
+            return cand;
+        }
+    }
+    return 14;
+}
+
 void ui_read_font_release(void)
 {
     if (s_loaded != NULL) {

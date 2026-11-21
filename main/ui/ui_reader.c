@@ -39,11 +39,15 @@ static int     s_page_cnt = 0;
 static int     s_page_cur = 0;
 
 static char    s_scan[SCAN_BYTES];          /* 从 reader 读出的原文 */
-static char    s_page[SCAN_BYTES + 1024];   /* 排版好的一页文本 */
 
-static lv_obj_t *s_text_lb  = NULL;         /* 正文 */
-static lv_obj_t *s_info_lb  = NULL;         /* 底部页码 */
+/*! 段距上限：一页最多拆成多少段 label（正常一页 30 行，远小于这个数） */
+#define PARA_MAX      24
+
 static lv_obj_t *s_measure  = NULL;         /* 隐藏的测量用 label */
+static lv_obj_t *s_info_lb  = NULL;         /* 底部页码 */
+/*! 正文按段拆成多个 label：段内由 LVGL 自动换行，段间 y 用像素精确控制 */
+static lv_obj_t *s_para_lbs[PARA_MAX];
+static int       s_para_cnt = 0;
 static lv_obj_t *s_titlebar = NULL;         /* 标题栏（书名要等打开完才知道，得留着改字） */
 
 /* 打开 / 排版期间的等待层与定时器 */
@@ -61,40 +65,38 @@ static int32_t     s_build_target = 0;      /* 页表要推到哪个字符偏移
 
 /* ===================== 排版参数（来自「设置 → 阅读」） ===================== */
 
-/*! 段距折算成段间空行后，一页文本最多膨胀到这个长度 */
+/*! 测量段前缀用的临时缓冲（最长一页文本，够任何一段） */
 #define PAGE_EXPANDED_MAX  (SCAN_BYTES * 2 + 1024)
 
 static int  s_line_space   = 6;     /*!< 行距（额外） */
 static int  s_letter_space = 0;     /*!< 字距 */
-static int  s_para_blanks  = 0;     /*!< 段间空行数 */
+static int  s_para_space   = 0;     /*!< 段距（像素，0~40） */
 static int  s_font_px      = 14;    /*!< 当前正文字号 */
-/*! 正文字体：14px 内嵌，16/20px 由 ui_font 从 SD 卡按需加载 */
+/*! 正文字体：14px 内嵌，16/18/20/22px 由 ui_font 按需加载 */
 static const lv_font_t *s_font = NULL;
 
-/* 渲染/测量共用的膨胀缓冲：两者不同时用，省一份 RAM */
-static char s_expand_buf[PAGE_EXPANDED_MAX];
+/* 渲染/测量共用的临时缓冲：两者不同时用，省一份 RAM */
+static char s_para_tmp[PAGE_EXPANDED_MAX];
 
 /**
  * @brief 读阅读设置
  *
- * 字号：设置页只给可用档位（14/16/20）。字库文件不在 SD 上时自动回退
- * 14px，不会出现「选了 20 但一点变化都没有」的假设置。
+ * 字号：设置页只给可用档位（14/16/18/20/22）。字库文件不在 SD/Flash 上时
+ * 自动回退 14px，不会出现「选了 20 但一点变化都没有」的假设置。
  */
 static void read_style_load(void)
 {
     s_line_space   = (int)srv_config_get_int(CFG_READ_LINE_SP, 6);
     s_letter_space = (int)srv_config_get_int(CFG_READ_LETTER_SP, 0);
+    s_para_space   = (int)srv_config_get_int(CFG_READ_PARA_SP, 0);
 
     s_font_px = (int)srv_config_get_int(CFG_READ_FONT_SIZE, 14);
     s_font    = ui_read_font_get(s_font_px);
 
-    /* 段距：LVGL 的 label 没有「段间距」，行高由字体定死，做不到像素级精确，
-     * 只能按整行近似 —— 段间多插几个空行。设置页里的段距步进是 10，
-     * 这里 10 → 1 个空行，档位一一对应。 */
-    int ps = (int)srv_config_get_int(CFG_READ_PARA_SP, 0);
-    s_para_blanks = ps / 10;
-    if (s_para_blanks < 0) {
-        s_para_blanks = 0;
+    /* 段距现在按像素直接加在段间：阅读器按段落拆成多个 label 渲染，
+     * 不再用「插入整行空行」近似，所以 1px 都能体现出来。 */
+    if (s_para_space < 0) {
+        s_para_space = 0;
     }
 }
 
@@ -104,38 +106,6 @@ static void text_style_apply(lv_obj_t *lb)
     lv_obj_set_style_text_font(lb, (s_font != NULL) ? s_font : (lv_font_t *)&font_ui_14, 0);
     lv_obj_set_style_text_line_space(lb, s_line_space, 0);
     lv_obj_set_style_text_letter_space(lb, s_letter_space, 0);
-}
-
-/**
- * @brief 把段间的换行扩展成「换行 + N 个空行」
- *
- * 膨胀只发生在渲染/测量用的临时缓冲里，字符数仍然按原文算，
- * 所以分页边界和阅读进度都不受影响。
- */
-static void expand_paragraphs(const char *src, char *dst, size_t cap)
-{
-    size_t p = 0;
-
-    if (cap == 0) {
-        return;
-    }
-
-    for (const char *s = src; *s != '\0'; s++) {
-        if (*s == '\n') {
-            for (int i = 0; i <= s_para_blanks; i++) {
-                if (p + 1 >= cap) {
-                    break;
-                }
-                dst[p++] = '\n';
-            }
-        } else {
-            if (p + 1 >= cap) {
-                break;
-            }
-            dst[p++] = *s;
-        }
-    }
-    dst[p] = '\0';
 }
 
 /* ===================== UTF-8 小工具 ===================== */
@@ -196,75 +166,148 @@ static int utf8_copy_n(const char *src, int n, char *dst, size_t dst_len)
     return (int)o;
 }
 
-/* ===================== 分页 ===================== */
+/* ===================== 分页（按段落） ===================== */
 
-/**
- * @brief 量一段文本在正文宽度下渲染出来有多高
- *
- * 用真的 label 去排版，而不是自己按字宽累加。理由是：自己算的宽度和
- * LVGL 实际渲染总有细微出入（字距、断行规则、中英混排的断点），
- * 一旦估小了，label 就会自己再折一次行、总高超出可见区，
- * 多出来的行被裁掉 —— 表现就是「中间缺了一大段」。
- */
-static lv_coord_t measure_height(const char *text)
+/*! 一页里的一段（text 指向 s_scan，show_page 直接用它渲染） */
+typedef struct {
+    const char *text;
+    int         bytes;
+    lv_coord_t  y;
+} page_para_t;
+
+static page_para_t s_page_paras[PARA_MAX];
+
+/*! 量「text 的前 chars 个字符」在正文宽度下渲染多高 */
+static lv_coord_t measure_prefix(const char *text, int chars)
 {
-    /* 量之前要跟渲染时做同样的段落膨胀，否则段距一调大，量出来的高度就偏小、
-     * 分页就会多塞几行，超出可见区被裁掉 */
-    if (s_para_blanks > 0) {
-        expand_paragraphs(text, s_expand_buf, sizeof(s_expand_buf));
-        lv_label_set_text(s_measure, s_expand_buf);
-    } else {
-        lv_label_set_text(s_measure, text);
-    }
+    utf8_copy_n(text, chars, s_para_tmp, sizeof(s_para_tmp));
+    lv_label_set_text(s_measure, s_para_tmp);
     lv_obj_update_layout(s_measure);
     return lv_obj_get_height(s_measure);
 }
 
-/**
- * @brief 二分找出「渲染高度不超过一屏」的最大字符数
- *
- * 排版结果随字数单调不减，所以能二分。一次约 10 轮，每轮排 600 字
- * 在 LVGL 里是亚毫秒级，翻页感觉不出来。
- */
-static int fit_chars(const char *text, int total, char *out, size_t out_len)
+/*! 从 s 起取一段（到 \n 或 max_chars），返回字符数；bytes_out = 字节数 */
+static int seg_count(const char *s, int max_chars, int *bytes_out)
 {
-    int lo = 1;
-    int hi = total;
-    int best = 0;
+    int len = (int)strlen(s);
+    int pos = 0, cnt = 0;
+    while (pos < len && cnt < max_chars && s[pos] != '\n') {
+        int cl = utf8_seq_len((uint8_t)s[pos]);
+        if (pos + cl > len) {
+            break;
+        }
+        pos += cl;
+        cnt++;
+    }
+    if (bytes_out != NULL) {
+        *bytes_out = pos;
+    }
+    return cnt;
+}
 
+/*! 一段最长能放多少个字符（不超过 avail_h 高） */
+static int para_fit_chars(const char *text, int total, lv_coord_t avail_h)
+{
+    if (total <= 0 || avail_h <= 0) {
+        return 0;
+    }
+    if (measure_prefix(text, total) <= avail_h) {
+        return total;
+    }
+
+    int lo = 1, hi = total, best = 0;
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
-
-        if (utf8_copy_n(text, mid, out, out_len) <= 0) {
-            hi = mid - 1;
-            continue;
-        }
-
-        if (measure_height(out) <= PAGE_TEXT_H) {
+        if (measure_prefix(text, mid) <= avail_h) {
             best = mid;
             lo = mid + 1;
         } else {
             hi = mid - 1;
         }
     }
-
-    if (best > 0) {
-        utf8_copy_n(text, best, out, out_len);
-    }
     return best;
 }
 
 /**
- * @brief 从 text 里切出正好放满一页的一段，写进 out
- * @return 用掉的字符数
+ * @brief 把 text 排成一页：按 \n 分段，段间加 s_para_space 像素
+ *
+ * @param out       输出段落布局；传 NULL 只计算本页吃掉的字符数
+ * @param used_chars 本页用掉的字符数（页表推进用）
+ * @return 段数
  */
-static int layout_page(const char *text, char *out, size_t out_len)
+static int layout_paras(const char *text, int total_chars,
+                        page_para_t *out, int max_out, int *used_chars)
 {
-    int total = utf8_count(text);
-    if (total <= 0) {
+    if (used_chars != NULL) {
+        *used_chars = 0;
+    }
+    if (total_chars <= 0) {
         return 0;
     }
-    return fit_chars(text, total, out, out_len);
+
+    int pos = 0, remaining = total_chars, count = 0;
+    lv_coord_t y = 0;
+
+    while (remaining > 0 && count < max_out) {
+        if (text[pos] == '\n') {
+            /* 空行/段落分隔：页首不计段距，页内按像素加 */
+            if (count > 0) {
+                y += s_para_space;
+            }
+            pos++;
+            remaining--;
+            continue;
+        }
+
+        int seg_chars = seg_count(text + pos, remaining, NULL);
+        if (seg_chars <= 0) {
+            break;
+        }
+
+        if (count > 0) {
+            y += s_para_space;
+        }
+        if (y >= PAGE_TEXT_H) {
+            break;
+        }
+
+        int fit = para_fit_chars(text + pos, seg_chars, PAGE_TEXT_H - y);
+        if (fit <= 0) {
+            if (count == 0) {
+                fit = 1;            /* 页首至少放一个字符，避免死循环 */
+            } else {
+                break;
+            }
+        }
+
+        int used_bytes = utf8_copy_n(text + pos, fit, s_para_tmp, sizeof(s_para_tmp));
+        if (used_bytes <= 0) {
+            break;
+        }
+
+        if (out != NULL && count < max_out) {
+            out[count].text  = text + pos;
+            out[count].bytes = used_bytes;
+            out[count].y     = y;
+        }
+        y += measure_prefix(text + pos, fit);
+        pos += used_bytes;
+        remaining -= fit;
+        count++;
+
+        if (fit < seg_chars) {
+            break;                  /* 这段没放完，本页到此为止 */
+        }
+        if (remaining > 0 && text[pos] == '\n') {
+            pos++;
+            remaining--;
+        }
+    }
+
+    if (used_chars != NULL) {
+        *used_chars = total_chars - remaining;
+    }
+    return count;
 }
 
 /* ===================== 页表 ===================== */
@@ -288,7 +331,9 @@ static bool build_next_page(void)
         return false;                   /* 到头了 */
     }
 
-    int used = layout_page(s_scan, s_page, sizeof(s_page));
+    int used = 0;
+    /* out 传 NULL 只算字符数，但 max_out 仍要给上限（否则循环一次都不进） */
+    (void)layout_paras(s_scan, utf8_count(s_scan), NULL, PARA_MAX, &used);
     if (used <= 0) {
         return false;
     }
@@ -309,12 +354,28 @@ static bool build_next_page(void)
 /* 自动翻页：每次换页都要把本页的计时归零（实现见「自动翻页」一节） */
 static void auto_reset(void);
 
+/* 把 s_page_paras 里的段画出来（段内换行交给 LVGL，段间用 y 精确控制） */
+static void render_page_paras(void)
+{
+    for (int i = 0; i < PARA_MAX; i++) {
+        if (i < s_para_cnt) {
+            lv_label_set_text_fmt(s_para_lbs[i], "%.*s",
+                                  s_page_paras[i].bytes, s_page_paras[i].text);
+            lv_obj_set_pos(s_para_lbs[i], RD_MARGIN,
+                           UI_TITLEBAR_H + 4 + s_page_paras[i].y);
+            lv_obj_remove_flag(s_para_lbs[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_para_lbs[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
 /**
  * @brief 渲染第 idx 页；页起点没算到这一页就先往后推导
  */
 static void show_page(int idx)
 {
-    if (idx < 0 || idx >= PAGE_MAX || s_text_lb == NULL || s_info_lb == NULL) {
+    if (idx < 0 || idx >= PAGE_MAX || s_para_lbs[0] == NULL || s_info_lb == NULL) {
         return;
     }
 
@@ -335,7 +396,9 @@ static void show_page(int idx)
         return;
     }
 
-    int used = layout_page(s_scan, s_page, sizeof(s_page));
+    int used = 0;
+    s_para_cnt = layout_paras(s_scan, utf8_count(s_scan),
+                              s_page_paras, PARA_MAX, &used);
     if (used <= 0) {
         return;
     }
@@ -350,12 +413,7 @@ static void show_page(int idx)
     }
 
     s_page_cur = idx;
-    if (s_para_blanks > 0) {
-        expand_paragraphs(s_page, s_expand_buf, sizeof(s_expand_buf));
-        lv_label_set_text(s_text_lb, s_expand_buf);
-    } else {
-        lv_label_set_text(s_text_lb, s_page);
-    }
+    render_page_paras();
 
     int total = srv_reader_char_count();
     int pct = (total > 0) ? (start * 100 / total) : 0;
@@ -739,7 +797,7 @@ static void on_menu_pick(int idx, void *arg)
 static void on_reader_long(lv_event_t *e)
 {
     (void)e;
-    if (!srv_reader_is_open() || s_text_lb == NULL) {
+    if (!srv_reader_is_open() || s_measure == NULL) {
         return;
     }
 
@@ -1370,7 +1428,7 @@ static bool goto_build_chapters(lv_obj_t *box)
 
 static void goto_show(void)
 {
-    if (!srv_reader_is_open() || s_text_lb == NULL || s_goto_mask != NULL) {
+    if (!srv_reader_is_open() || s_measure == NULL || s_goto_mask != NULL) {
         return;
     }
 
@@ -1699,10 +1757,14 @@ static void reader_root_del_cb(lv_event_t *e)
         s_titlebar = NULL;
     }
 
-    if (s_text_lb != NULL && lv_obj_get_parent(s_text_lb) == root) {
-        s_text_lb = NULL;
-        s_info_lb = NULL;
+    if (s_measure != NULL && lv_obj_get_parent(s_measure) == root) {
         s_measure = NULL;
+        s_info_lb = NULL;
+    }
+    for (int i = 0; i < PARA_MAX; i++) {
+        if (s_para_lbs[i] != NULL && lv_obj_get_parent(s_para_lbs[i]) == root) {
+            s_para_lbs[i] = NULL;
+        }
     }
 
     /* 自动翻页：定时器按 root 认领，线对象随页面一起销毁 */
@@ -1872,14 +1934,20 @@ static void reader_build_content(lv_obj_t *root)
      * 重建页表也会按新参数来 */
     read_style_load();
 
-    /* 正文 */
-    s_text_lb = lv_label_create(root);
-    lv_obj_set_style_text_color(s_text_lb, UI_COLOR_TEXT, 0);
-    text_style_apply(s_text_lb);
-    lv_obj_set_width(s_text_lb, PAGE_TEXT_W);
-    lv_obj_set_pos(s_text_lb, RD_MARGIN, UI_TITLEBAR_H + 4);
-    lv_label_set_long_mode(s_text_lb, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(s_text_lb, "");
+    /* 正文：按段落拆成多个 label。段内由 LVGL 自动换行，段间 y 由分页
+     * 结果精确控制（段距按像素，1px 都生效）。 */
+    for (int i = 0; i < PARA_MAX; i++) {
+        lv_obj_t *lb = lv_label_create(root);
+        lv_obj_set_style_text_color(lb, UI_COLOR_TEXT, 0);
+        text_style_apply(lb);
+        lv_obj_set_width(lb, PAGE_TEXT_W);
+        lv_obj_set_pos(lb, RD_MARGIN, UI_TITLEBAR_H + 4);
+        lv_label_set_long_mode(lb, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(lb, "");
+        lv_obj_add_flag(lb, LV_OBJ_FLAG_HIDDEN);
+        s_para_lbs[i] = lb;
+    }
+    s_para_cnt = 0;
 
     /* 测量用的 label：字体、行距、字距、宽度都要跟正文一致才量得准。
      * 挪到屏幕下方而不是用 HIDDEN —— 隐藏对象不参与布局计算。 */

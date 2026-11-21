@@ -57,7 +57,7 @@ typedef struct {
     int32_t read_font_size;                             /*!< 字号 px（暂时没有多档字体，等做好再接） */
     int32_t read_letter_space;                          /*!< 字距 */
     int32_t read_line_space;                            /*!< 行距 */
-    int32_t read_para_space;                            /*!< 段距：一格 10 = 段间一个空行 */
+    int32_t read_para_space;                            /*!< 段距（像素，0~40） */
     int32_t read_keep_bright;                           /*!< 阅读器里不自动降亮度 0/1 */
     int32_t read_auto_sec;                              /*!< 自动翻页间隔（秒） */
     int32_t shelf_recent;                               /*!< 书架按最近阅读排序 0/1 */

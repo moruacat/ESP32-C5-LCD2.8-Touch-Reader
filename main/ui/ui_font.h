@@ -25,6 +25,9 @@ bool ui_read_font_available(int px);
 /** 下一个可用字号（14 → 16 → 18 → 20 → 22 → 14） */
 int ui_read_font_next(int px);
 
+/** 上一个可用字号（14 → 22 → 20 → 18 → 16 → 14） */
+int ui_read_font_prev(int px);
+
 /**
  * @brief 释放动态加载的字库（回退到 14px）
  *

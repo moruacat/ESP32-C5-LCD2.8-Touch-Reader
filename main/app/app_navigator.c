@@ -104,25 +104,6 @@ static app_page_id_t s_building = PAGE_MAX;
 
 /*! 是不是「旋转后原地重建」触发的 build（页面据此决定要不要保留状态） */
 static bool s_relayout = false;
-
-/* 这些页面自己要用横向滑动（翻页 / 操作游戏 / 涂鸦 / 拨球 / 切照片），
- * 不能再兼做「右滑返回」，否则两个动作会抢同一个手势。它们的退出都走标题栏返回键。 */
-static bool page_has_own_gesture(app_page_id_t page)
-{
-    switch (page) {
-    case PAGE_READER:
-    case PAGE_PHOTOS:
-    case PAGE_GAME_2048:
-    case PAGE_GAME_SNAKE:
-    case PAGE_GAME_GOMOKU:
-    case PAGE_GAME_PAINT:
-    case PAGE_GAME_SOCCER:
-        return true;
-    default:
-        return false;
-    }
-}
-
 /* 页面构建：屏幕 -> 根容器 -> 页面控件。
  * 关键点：屏幕只负责提供不透明底色，页面内容与滑入动画都作用在根容器上。
  * 直接给屏幕设 LV_PCT 尺寸或做位移动画会导致重绘区域算错，出现旧界面残影。 */
@@ -149,8 +130,9 @@ static lv_obj_t *page_build(app_page_id_t page)
     }
     s_building = PAGE_MAX;
 
-    /* 各页面统一个手势入口（自己要用滑动的页面除外） */
-    if (!page_has_own_gesture(page)) {
+    /* 只保留时钟页的隐藏入口手势（左滑主菜单、上滑日历、右滑安全模式）。
+     * 其它页面的「右滑返回」已彻底移除，避免翻页/拖动时误触。 */
+    if (page == PAGE_CLOCK) {
         ui_enable_swipe(root);
     }
 
@@ -454,7 +436,6 @@ void app_navigator_push_placeholder(const char *title, const char *note)
 
     lv_obj_t *root = ui_page_root_create(scr);
     ui_placeholder_build(root, title, note, app_navigator_back_cb, NULL);
-    ui_enable_swipe(root);
 
     if (s_depth < NAV_STACK_MAX) {
         s_stack[s_depth++] = s_current;

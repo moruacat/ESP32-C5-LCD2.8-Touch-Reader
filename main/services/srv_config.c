@@ -119,7 +119,7 @@ static const cfg_field_t s_fields[] = {
     I32(CFG_READ_FONT_SIZE,  read_font_size,     20,     8, 48),
     I32(CFG_READ_LETTER_SP,  read_letter_space, 0,     0, 10),
     I32(CFG_READ_LINE_SP,    read_line_space,  6,      0, 30),
-    /* 段距一格 10：段间只能整行地留空，一格一档 */
+    /* 段距按像素存（0~40）：阅读器按段落拆 label，1px 都生效 */
     I32(CFG_READ_PARA_SP,    read_para_space,  0,      0, 40),
     /* 阅读器里默认允许自动变暗，想安安静静看书可以关掉 */
     I32(CFG_READ_KEEP_BRIGHT, read_keep_bright, 0,     0, 1),

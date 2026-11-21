@@ -102,6 +102,24 @@ esp_err_t bsp_display_brightness_init(void);
  */
 esp_err_t bsp_display_brightness_set(int brightness_percent);
 
+/**
+ * @brief Set LCD backlight PWM duty directly (0-255)
+ *
+ * CH32V003 的背光 PWM 是 8 位的，百分比接口只有 101 档；做亮度过渡时
+ * 直接用原始占空比，才能用满 256 级（尤其是低亮度段）。
+ *
+ * @param[in] duty  PWM duty (0 ~ 255)
+ * @return
+ *      - ESP_OK    On success
+ *      - Others    Failure
+ */
+esp_err_t bsp_display_backlight_set_duty(int duty);
+
+/**
+ * @brief Get current backlight PWM duty (0-255)
+ */
+int bsp_display_backlight_get_duty(void);
+
 
 #ifdef __cplusplus
 }

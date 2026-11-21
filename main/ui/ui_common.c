@@ -195,15 +195,12 @@ static void swipe_released_cb(lv_event_t *e)
         }
     } else {
         /* 右滑：时钟页上是安全模式手势的第二步（左上角连点 5 次 → 2 秒内右滑）
-         * 打开安全菜单（左功能 / 右完整版设置），不是直接切安全模式 */
-        if (app_navigator_current() == PAGE_CLOCK) {
-            if (srv_safe_armed()) {
-                srv_safe_disarm();
-                app_navigator_switch_anim(PAGE_SAFE_MENU, true, APP_NAV_ANIM_LEFT);
-            }
-            return;                 /* 时钟页右滑本来就没有别的动作 */
+         * 打开安全菜单（左功能 / 右完整版设置），不是直接切安全模式。
+         * 其它页面不再做「右滑返回」——已彻底移除，避免翻页/拖动时误触。 */
+        if (app_navigator_current() == PAGE_CLOCK && srv_safe_armed()) {
+            srv_safe_disarm();
+            app_navigator_switch_anim(PAGE_SAFE_MENU, true, APP_NAV_ANIM_LEFT);
         }
-        app_navigator_back();
     }
 }
 
@@ -676,7 +673,7 @@ void ui_placeholder_build(lv_obj_t *root, const char *title, const char *note,
 lv_obj_t *ui_settings_list_create(lv_obj_t *root)
 {
     /* 行数一多就会比一屏高，所以必须可滚动。
-     * 纵向拖动滚列表，横向滑动仍然由页面手势接管（右滑返回）。 */
+     * 纵向拖动滚列表；右滑返回手势已全局移除，不会再和滚动抢事件。 */
     lv_obj_t *list = lv_obj_create(root);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_set_size(list, ui_scr_w(), ui_scr_h() - UI_TITLEBAR_H);

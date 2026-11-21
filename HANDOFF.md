@@ -557,7 +557,11 @@ python tools\gen_dict.py
 | 版本 1.5.4 | 根 CMakeLists `PROJECT_VER` | `CMakeLists.txt` |
 | 词书里大写单词「列表有、点开打不开」 | `key_of()` 锚点 key 没折叠大小写：`find_word/prefix` 用 `strncasecmp` 但锚点二分用 `memcmp`，`Apple` 会定位到 a 段之前，128 行扫不到。现在 key 统一折叠 ASCII 大小写 | `srv_dict.c` |
 | 开机崩溃 `tcpip_send_msg_wait_sem: Invalid mbox` | `motion_net` 开着时姿态广播任务在 `srv_wifi_init()` 之前就 `socket()`，lwIP mbox 还没建。改为等 `srv_wifi_is_connected()` 为真再建 socket，断线关闭重等 | `srv_motion.c` |
-| 时钟页显示农历 | 新增 `srv_lunar`（1900–2099 查表 + 干支/月日格式化），日期行拼成「2026-11-21 星期六 农历丙午年十月十三」 | `srv_lunar.[ch]`、`lunar_table.inc`、`ui_clock.c`、`tools/gen_lunar_table.py` |
+| 时钟页显示农历 | 新增 `srv_lunar`（1900–2099 查表 + 干支/月日格式化），日期行下面单独一行农历；计时器运行时让位 | `srv_lunar.[ch]`、`lunar_table.inc`、`ui_clock.c`、`tools/gen_lunar_table.py` |
+| 移除滑动返回 | 全局右滑返回删除（只有时钟页还挂 `ui_enable_swipe`，保留左滑主菜单/上滑日历/安全模式右滑入口） | `app_navigator.c`、`ui_common.c` |
+| 字号 +/- 方向 | `+` 下一档、`-` 上一档；新增 `ui_read_font_prev()` | `ui_set_read.c`、`ui_font.[ch]` |
+| 段距像素级 | 阅读器正文改为按段拆 label：段内 LVGL 换行，段间 y 直接加 `read_para_space` 像素（0~40，1px 生效）；分页也按段高累加 | `ui_reader.c`、`ui_set_read.c`、`srv_config.[ch]` |
+| 熄屏亮度过渡 | BSP 新增 raw duty（0~255）接口；熄屏 520ms、唤醒 380ms、自动变暗 260ms，45 步；变暗用二次曲线（暗部慢），变亮线性；熄屏先渐暗再盖黑层 | `ui_sleep.c`、`components/.../bsp/display.h`、`esp32_c5_touch_lcd_2.8.c` |
 | 陀螺仪 → 电脑虚拟场景 | 固件新增姿态融合与 UDP 4210 广播（30Hz 文本行），设置→关于加开关；电脑端 `tools/motion3d` PyQt5 实时 3D + 位置积分；STEP→OBJ 可选 | `srv_motion.[ch]`、`ui_set_about.c`、`app_init.c`、`tools/motion3d/` |
 
 ### 13.2 分区表（已改，必须完整重烧）
