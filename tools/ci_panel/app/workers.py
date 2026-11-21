@@ -505,12 +505,13 @@ class LogsWorker(BaseWorker):
 
 class FlashWorker(BaseWorker):
     def __init__(self, tool: EsptoolTool, port: str, paths: dict[str, str],
-                 baud: int = 460800) -> None:
+                 baud: int = 460800, full: bool = True) -> None:
         super().__init__()
         self.tool = tool
         self.port = port
         self.paths = paths
         self.baud = baud
+        self.full = full
         self._proc: subprocess.Popen | None = None
 
     def cancel(self) -> None:
@@ -529,21 +530,25 @@ class FlashWorker(BaseWorker):
             "--before", "default-reset", "--after", "hard-reset",
             "write-flash", "--flash-mode", "dio", "--flash-size", "32MB",
             "--flash-freq", "80m",
-            "0x2000", self.paths["bootloader"],
-            "0x8000", self.paths["partition_table"],
         ]
-        if self.paths.get("ota_data"):
-            args += ["0xf000", self.paths["ota_data"]]
+        if self.full:
+            args += [
+                "0x2000", self.paths["bootloader"],
+                "0x8000", self.paths["partition_table"],
+            ]
+            if self.paths.get("ota_data"):
+                args += ["0xf000", self.paths["ota_data"]]
         args += ["0x20000", self.paths["app"]]
 
         # 本地一键生成的 font 分区镜像（tools/gen_read_fonts.py 默认输出
-        # build/font.bin）。CI artifact 里一般没有它，所以由 window 传入本地路径。
+        # build/font.bin）。CI artifact 里一般没有它，所以由 window 传入本地路径；
+        # 只有勾选了「同时烧录阅读字库」才会走到这里。
         font_bin = str(self.paths.get("font") or "").strip()
         if font_bin and Path(font_bin).is_file():
             args += [FONT_PARTITION_OFFSET, font_bin]
             self.log.emit(f"阅读字库镜像：{font_bin} -> {FONT_PARTITION_OFFSET}", "info")
         else:
-            self.log.emit("没有阅读字库镜像，font 分区保持原样（字号回退 SD/14px）", "muted")
+            self.log.emit("不烧阅读字库，font 分区保持原样", "muted")
 
         cmd = list(self.tool.cmd) + args
 

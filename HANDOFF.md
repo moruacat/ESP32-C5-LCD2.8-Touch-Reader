@@ -556,6 +556,7 @@ python tools\gen_dict.py
 | 设置保存到分区、防止坏文件无限重启 | 设置改存 NVS（blob + magic/版本/长度/CRC32）；读坏回默认；旧 `/config.dat` 首次导入一次 | `srv_config.[ch]` |
 | 版本 1.5.4 | 根 CMakeLists `PROJECT_VER` | `CMakeLists.txt` |
 | 词书里大写单词「列表有、点开打不开」 | `key_of()` 锚点 key 没折叠大小写：`find_word/prefix` 用 `strncasecmp` 但锚点二分用 `memcmp`，`Apple` 会定位到 a 段之前，128 行扫不到。现在 key 统一折叠 ASCII 大小写 | `srv_dict.c` |
+| 开机崩溃 `tcpip_send_msg_wait_sem: Invalid mbox` | `motion_net` 开着时姿态广播任务在 `srv_wifi_init()` 之前就 `socket()`，lwIP mbox 还没建。改为等 `srv_wifi_is_connected()` 为真再建 socket，断线关闭重等 | `srv_motion.c` |
 | 陀螺仪 → 电脑虚拟场景 | 固件新增姿态融合与 UDP 4210 广播（30Hz 文本行），设置→关于加开关；电脑端 `tools/motion3d` PyQt5 实时 3D + 位置积分；STEP→OBJ 可选 | `srv_motion.[ch]`、`ui_set_about.c`、`app_init.c`、`tools/motion3d/` |
 
 ### 13.2 分区表（已改，必须完整重烧）

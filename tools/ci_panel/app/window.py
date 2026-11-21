@@ -388,6 +388,21 @@ class MainWindow(QMainWindow):
         port_row.addWidget(self.refresh_ports_btn)
         box.addLayout(port_row)
 
+        # 烧录范围与字库都是可选的：日常只更新 app 时可以关掉完整烧录；
+        # 字库很少变，默认不烧（11MB 会明显拖慢每次刷写）。
+        self.full_flash_check = QCheckBox("完整烧录（bootloader / 分区表 / OTA 数据）")
+        self.full_flash_check.setToolTip(
+            "首次刷入新分区表、或从旧版本升级时勾选；日常只更新 app 可以取消。")
+        box.addWidget(self.full_flash_check)
+
+        self.font_flash_check = QCheckBox("同时烧录阅读字库（font.bin，约 11MB）")
+        self.font_flash_check.setChecked(self.prefs.text("flash/font", "0") == "1")
+        self.font_flash_check.setToolTip(
+            "字库很少变；不勾选时烧录快很多，字号仍可用 Flash 里已有的字库。")
+        box.addWidget(self.font_flash_check)
+
+        self.full_flash_check.setChecked(self.prefs.text("flash/full", "1") == "1")
+
         self.flash_btn = QPushButton("烧录到设备")
         self.flash_btn.setProperty("variant", "danger")
         self.flash_btn.setToolTip("烧录会覆盖设备当前固件；点击后还会再次确认。")
@@ -1145,19 +1160,33 @@ class MainWindow(QMainWindow):
             "font": "",
         }
 
+        full_flash = self.full_flash_check.isChecked()
+        want_font = self.font_flash_check.isChecked()
+
         # 阅读字库镜像：artifact 里没有时用本地一键生成的 build/font.bin
-        # （tools/gen_read_fonts.py 默认就输出到这里）。
-        font_path = str(self._last_download.get("font") or "").strip()
+        # （tools/gen_read_fonts.py 默认就输出到这里）。只有勾选了才烧。
+        font_path = ""
         font_from_local = False
-        if not font_path:
-            local_font = REPO_ROOT / "build" / "font.bin"
-            if local_font.is_file():
-                font_path = str(local_font)
-                font_from_local = True
+        if want_font:
+            font_path = str(self._last_download.get("font") or "").strip()
+            if not font_path:
+                local_font = REPO_ROOT / "build" / "font.bin"
+                if local_font.is_file():
+                    font_path = str(local_font)
+                    font_from_local = True
+            if not font_path:
+                QMessageBox.warning(
+                    self, "找不到字库镜像",
+                    "勾选了「同时烧录阅读字库」，但没有找到 font.bin。\n\n"
+                    "先运行：python tools/gen_read_fonts.py\n"
+                    "或取消勾选，只烧固件（Flash 里已有的字库仍可用）。")
+                return
         paths["font"] = font_path
 
-        missing = [Path(p) for key, p in paths.items()
-                   if key not in ("ota_data", "font") and not Path(p).is_file()]
+        required = ["app"]
+        if full_flash:
+            required += ["bootloader", "partition_table"]
+        missing = [Path(paths[key]) for key in required if not Path(paths[key]).is_file()]
         if missing:
             QMessageBox.warning(self, "固件文件缺失",
                                 "下载目录中的固件文件不完整，请重新下载。")
@@ -1165,17 +1194,21 @@ class MainWindow(QMainWindow):
 
         run_id = self._last_download.get("run_id")
         sha = str(self._last_download.get("head_sha") or "")[:7]
+        if full_flash:
+            range_note = "烧录范围：完整（bootloader / 分区表 / OTA 数据 / app）"
+        else:
+            range_note = "烧录范围：仅 app（0x20000）"
         if font_path:
             font_note = "阅读字库：有（%s）" % (
                 "本地 build/font.bin" if font_from_local else "运行产物")
         else:
-            font_note = "阅读字库：无（字号回退 SD /fonts 或 14px；可先跑 tools/gen_read_fonts.py）"
+            font_note = "阅读字库：不烧（保留 Flash 里已有的字库）"
         box = QMessageBox(self)
         box.setWindowTitle("确认烧录")
         box.setIcon(QMessageBox.Warning)
         box.setText(f"即将向 {port} 烧录固件")
         box.setInformativeText(
-            f"运行 #{run_id} · {sha}\n{font_note}\n\n"
+            f"运行 #{run_id} · {sha}\n{range_note}\n{font_note}\n\n"
             "烧录会覆盖设备当前固件。请确认设备已连接，且烧录过程中不要断开。")
         yes = box.addButton("开始烧录", QMessageBox.AcceptRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
@@ -1185,7 +1218,9 @@ class MainWindow(QMainWindow):
             return
 
         self.prefs.set("flash/port", port)
-        worker = FlashWorker(tool, port, paths)
+        self.prefs.set("flash/full", "1" if full_flash else "0")
+        self.prefs.set("flash/font", "1" if want_font else "0")
+        worker = FlashWorker(tool, port, paths, full=full_flash)
         self._append_log(f"开始烧录到 {port} ...", "accent")
         self._start_task(worker, self._on_flash_done, "正在烧录，请勿断开设备...")
 

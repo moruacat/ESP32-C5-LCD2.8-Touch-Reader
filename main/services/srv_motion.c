@@ -179,17 +179,11 @@ static void stream_task(void *arg)
 {
     (void)arg;
 
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "UDP socket 创建失败");
-        s_stream_run = false;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    int on = 1;
-    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
-
+    /* socket() 必须等 lwIP 起来之后再调：本任务在 app_init 的传感器初始化
+     * 之后就会启动，那时 srv_wifi_init() 还没跑，tcpip mbox 不存在，
+     * 直接 socket() 会 assert（tcpip_send_msg_wait_sem: Invalid mbox）。
+     * 所以这里先等 WiFi 连接成功，再建 socket；断线后关掉重等。 */
+    int sock = -1;
     struct sockaddr_in dst;
     memset(&dst, 0, sizeof(dst));
     dst.sin_family      = AF_INET;
@@ -201,6 +195,10 @@ static void stream_task(void *arg)
 
     while (s_stream_run) {
         if (!srv_wifi_is_connected()) {
+            if (sock >= 0) {
+                close(sock);
+                sock = -1;
+            }
             if (net_ok) {
                 ESP_LOGW(TAG, "网络断开，姿态广播暂停");
                 net_ok = false;
@@ -208,7 +206,16 @@ static void stream_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-        if (!net_ok) {
+
+        if (sock < 0) {
+            sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (sock < 0) {
+                ESP_LOGW(TAG, "UDP socket 创建失败，稍后重试");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+            int on = 1;
+            setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
             ESP_LOGI(TAG, "姿态广播开始：UDP %d 端口，约 30Hz", SRV_MOTION_UDP_PORT);
             net_ok = true;
         }
@@ -233,7 +240,9 @@ static void stream_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(STREAM_PERIOD_MS));
     }
 
-    close(sock);
+    if (sock >= 0) {
+        close(sock);
+    }
     s_stream_task = NULL;
     ESP_LOGI(TAG, "姿态广播已停止");
     vTaskDelete(NULL);
