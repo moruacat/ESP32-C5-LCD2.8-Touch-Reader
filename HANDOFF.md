@@ -561,7 +561,7 @@ python tools\gen_dict.py
 | 移除滑动返回 | 全局右滑返回删除（只有时钟页还挂 `ui_enable_swipe`，保留左滑主菜单/上滑日历/安全模式右滑入口） | `app_navigator.c`、`ui_common.c` |
 | 字号 +/- 方向 | `+` 下一档、`-` 上一档；新增 `ui_read_font_prev()` | `ui_set_read.c`、`ui_font.[ch]` |
 | 段距像素级 | 阅读器正文改为按段拆 label：段内 LVGL 换行，段间 y 直接加 `read_para_space` 像素（0~40，1px 生效）；分页也按段高累加 | `ui_reader.c`、`ui_set_read.c`、`srv_config.[ch]` |
-| 熄屏亮度过渡 | BSP 新增 raw duty（0~255）接口；熄屏/唤醒都 225ms（45 步 × 5ms，0.25s 内）、自动变暗 260ms；变暗用二次曲线（暗部慢），变亮线性；熄屏先渐暗再盖黑层 | `ui_sleep.c`、`components/.../bsp/display.h`、`esp32_c5_touch_lcd_2.8.c` |
+| 熄屏亮度过渡 | BSP 新增 raw duty（0~255）接口；熄屏/唤醒 140ms（28 步 × 5ms，0.15s 内）、自动变暗 260ms；变暗用二次曲线（暗部慢），变亮线性；熄屏先渐暗再盖黑层 | `ui_sleep.c`、`components/.../bsp/display.h`、`esp32_c5_touch_lcd_2.8.c` |
 | 陀螺仪 → 电脑虚拟场景 | 固件新增姿态融合与 UDP 4210 广播（30Hz 文本行），设置→关于加开关；电脑端 `tools/motion3d` PyQt5 实时 3D + 位置积分；STEP→OBJ 可选 | `srv_motion.[ch]`、`ui_set_about.c`、`app_init.c`、`tools/motion3d/` |
 
 ### 13.2 分区表（已改，必须完整重烧）

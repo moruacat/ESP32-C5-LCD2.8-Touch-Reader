@@ -45,11 +45,11 @@ bool ui_sleep_is_on(void)
  *   - 唤醒/变亮：线性，第一步不会从 0 直接跳到很亮。
  * 低亮度下 1/255 是硬件下限，没有做时间抖动（会看到闪烁）。
  */
-#define FADE_STEPS      45
+#define FADE_STEPS      28
 #define FADE_DIM_MS     260
-/* 熄屏/亮屏都要求 0.25 秒内完成：45 步 × 5ms = 225ms */
-#define FADE_SLEEP_MS   250
-#define FADE_WAKE_MS    250
+/* 熄屏/亮屏要求 0.15 秒内完成：28 步 × 5ms = 140ms */
+#define FADE_SLEEP_MS   150
+#define FADE_WAKE_MS    150
 
 static lv_timer_t *s_fade_timer = NULL;
 static int s_fade_from = 0;
