@@ -4,6 +4,7 @@ idf_component_register(
         "app/app_init.c"
         "app/app_navigator.c"
         "ui/ui_common.c"
+        "ui/ui_font.c"
         "ui/ui_oobe.c"
         "ui/ui_clock.c"
         "ui/ui_home.c"
@@ -113,6 +114,7 @@ idf_component_register(
         lvgl
         esp_xiaozhi
         mcp-c-sdk
+        spiffs
     PRIV_REQUIRES
         # ★ main 自己的一堆 services/srv_*.c 和 ui/ui_sleep.c 直接用 esp_timer，
         #   但这条依赖以前是靠别的组件传递带进来的：传递链一变（比如这次换 lvgl 包）
@@ -127,3 +129,21 @@ idf_component_register(
 # （bsp 和 adapter 组件一处都没用，不受影响，IDF 自身的告警也不受影响）。
 # 等真要升 LVGL v10 时，再按官方映射统一换掉。
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-deprecated-declarations)
+
+# =============================================================================
+# 内置词库镜像（dict 分区，SPIFFS）
+#
+# 数据来自 tools/build_flash_dict.py 生成的 flash_assets/dict/（约 7.5MB，
+# 12 万常用词）。目录不存在就跳过，不影响常规 app 构建：
+# 没有内置词库时设备端自动回退到 SD 卡 /dict。
+#
+# 注意：改分区表后第一次必须完整烧录（idf.py flash 会把 dict.bin 一起写），
+# 之后日常只烧 app 不会覆盖这个分区。
+# =============================================================================
+set(FLASH_ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../flash_assets")
+if(EXISTS "${FLASH_ASSETS_DIR}/dict/dict.dat")
+    spiffs_create_partition_image(dict "${FLASH_ASSETS_DIR}" FLASH_IN_PROJECT)
+    message(STATUS "内置词库：打包 ${FLASH_ASSETS_DIR}")
+else()
+    message(STATUS "内置词库目录不存在，跳过 dict 分区镜像（先跑 tools/build_flash_dict.py）")
+endif()

@@ -1,6 +1,7 @@
 #pragma once
 #include "esp_err.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,41 @@ bool srv_motion_ready(void);
  */
 esp_err_t srv_motion_read_tilt(float *x, float *y);
 
+/* ===================== 姿态 / 网络传输（电脑端 3D 显示用） ===================== */
+
+/**
+ * @brief 一帧姿态采样
+ *
+ * 角度单位：四元数无量纲，加速度 g（9.807 m/s² = 1.0），角速度 °/s。
+ * 轴就是 QMI8658 的芯片轴（与板子的焊接方向有关，电脑端可以旋转对齐）。
+ */
+typedef struct {
+    uint32_t seq;                               /*!< 递增序号，丢包统计用 */
+    float    ax, ay, az;                        /*!< 加速度（g） */
+    float    gx, gy, gz;                        /*!< 角速度（°/s） */
+    float    qw, qx, qy, qz;                    /*!< 姿态四元数（机身 → 世界） */
+} srv_motion_sample_t;
+
+/**
+ * @brief 读一帧并更新姿态融合（任意频率调用，内部按 dt 积分）
+ *
+ * 互补滤波：陀螺积分负责快速响应，加速度计负责修正长期漂移。
+ * 上电后的第一批数据会用来初始化姿态。
+ */
+esp_err_t srv_motion_read_sample(srv_motion_sample_t *out);
+
+/**
+ * @brief 打开/关闭姿态 UDP 广播（端口 4210，30Hz，文本行）
+ *
+ * 同一 WiFi 下电脑运行 tools/motion3d 监听即可看到实时 3D 姿态。
+ * 关闭时任务退出，不会占 CPU/网络。
+ */
+void srv_motion_stream_set_enabled(bool en);
+bool srv_motion_stream_enabled(void);
+
+/** 广播端口（固定；电脑端与固件要一致） */
+#define SRV_MOTION_UDP_PORT     4210
+
 /* ===================== 方向校正 ===================== */
 
 /**
@@ -43,7 +79,7 @@ esp_err_t srv_motion_read_tilt(float *x, float *y);
  *   swap_xy  交换两轴 —— 手感差了 90° 时用
  *   flip_x   左右翻转
  *   flip_y   上下翻转
- * 选择存在 /config.dat 的 motion_flip 里（bit2/bit0/bit1），重启保留。
+ * 选择存在 NVS 配置的 motion_flip 里（bit2/bit0/bit1），重启保留。
  */
 bool srv_motion_swap_xy(void);
 bool srv_motion_flip_x(void);

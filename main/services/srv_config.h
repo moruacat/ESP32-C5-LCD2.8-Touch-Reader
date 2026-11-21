@@ -71,6 +71,9 @@ typedef struct {
     /* 游戏 */
     int32_t motion_flip;                                /*!< 重力感应方向翻转：bit0 左右，bit1 上下 */
 
+    /* 姿态网络广播（电脑端 3D 显示）：0=关 1=开 */
+    int32_t motion_net;
+
     /* 计时器 / 倒计时 */
     int32_t timer_sound;                                /*!< 倒计时到点提示音开关 0/1 */
 
@@ -119,6 +122,7 @@ typedef struct {
 #define CFG_TEMP_REC_EN     "temp_rec_en"
 #define CFG_TIMER_SOUND     "timer_sound"
 #define CFG_MOTION_FLIP     "motion_flip"
+#define CFG_MOTION_NET      "motion_net"    /*!< 姿态 UDP 广播开关 */
 #define CFG_PHOTO_PASS      "photo_pass"
 
 /**
@@ -165,8 +169,10 @@ typedef struct {
 
 /* ===================== 生命周期 ===================== */
 /**
- * @brief 初始化配置：填默认值后从 SD 卡的 /config.dat 加载。
- *        文件不存在或损坏时保持默认值并标记待写回，不阻塞启动。
+ * @brief 初始化配置：填默认值后从 Flash 的 NVS 分区加载。
+ *        NVS 里没有或校验失败时回默认值，并尝试导入一次旧版 SD 卡的
+ *        /config.dat（导入后以 NVS 为准），不阻塞启动。
+ *        PC 模拟器没有 NVS，退化为读写 SD 上的 config.dat。
  */
 esp_err_t srv_config_init(void);
 
@@ -216,7 +222,9 @@ esp_err_t srv_config_get_str(const char *key, char *out, size_t out_len);
 
 /* ===================== 落盘 ===================== */
 /**
- * @brief 立即写回 /config.dat（SD 未挂载时返回错误并保持 dirty）
+ * @brief 立即写回 NVS（真机）或 SD 上的 config.dat（模拟器）
+ *
+ * 写入失败只记录错误并保持 dirty，不阻塞调用方、也不会重启。
  */
 esp_err_t srv_config_save(void);
 

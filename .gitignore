@@ -20,6 +20,17 @@ dict/zhdict*
 photos/
 words/*/*
 
+# ===== Flash 内置词库（生成物，本地生成）=====
+# CI 构建不带词库镜像；本地用 tools/build_flash_dict.py --image 生成，
+# CI 面板烧录时会自动带上 build/dict.bin（如果存在）
+flash_assets/
+
+# ===== 阅读器多档字号字库（生成物）=====
+# tools/gen_read_fonts.py 生成，拷到 SD 卡 /fonts 使用
+font/font_ui_16.bin
+font/font_ui_20.bin
+font/*.bin
+
 # ===== 模拟器（仅本地调试用）=====
 sim/
 sdcard/

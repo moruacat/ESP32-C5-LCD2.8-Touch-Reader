@@ -139,8 +139,15 @@ static void ai_root_del_cb(lv_event_t *e)
         lv_timer_delete(t);
     }
 
-    /* 退出页面 = 结束会话（后台会自己收尾，这里不阻塞） */
-    srv_ai_stop();
+    /* 只有真的离开 AI 页才结束会话。
+     *
+     * 转屏是「原地重建」：新屏先建好，旧屏才 delete_async。如果这里无条件
+     * stop，就会把刚继承下来的会话掐掉，同时新页启动时又会撞上
+     * ESP_ERR_INVALID_STATE（上一轮还在收尾），界面就显示「上一轮还没断开」。
+     * 切到别的页时 app_navigator_current() 已经不是 PAGE_AI，才需要真正断开。 */
+    if (app_navigator_current() != PAGE_AI) {
+        srv_ai_stop();
+    }
 
     s_state_lb = NULL;
     s_code_lb  = NULL;
@@ -239,11 +246,14 @@ void ui_ai_create(lv_obj_t *root)
 
     ai_refresh();
 
-    /* 进页面就开会话；上一轮还没退干净时会返回错误，界面显示出来即可 */
-    esp_err_t ret = srv_ai_start();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "启动会话失败: %s", esp_err_to_name(ret));
-        lv_label_set_text(s_state_lb, "上一轮还没断开，稍等再试");
+    /* 进页面就开会话。转屏重建时上一轮会话还在跑，直接接管界面就行，
+     * 不要再 start（那会返回「上一轮还没断开」并弹提示）。 */
+    if (!srv_ai_running()) {
+        esp_err_t ret = srv_ai_start();
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "启动会话失败: %s", esp_err_to_name(ret));
+            lv_label_set_text(s_state_lb, "上一轮还没断开，稍等再试");
+        }
     }
 
     lv_timer_t *tmr = lv_timer_create(ai_tick_cb, TICK_MS, NULL);

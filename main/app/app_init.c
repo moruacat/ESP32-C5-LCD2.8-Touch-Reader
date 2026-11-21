@@ -81,13 +81,24 @@ static void lcd_cs_gpio_init(void)
 
 void app_init_all(void)
 {
-    /* 1. NVS（WiFi 校准等系统数据） */
+    /* 1. NVS（WiFi 校准 + 设置存储） */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+        /* 擦除失败也不 abort：最多设置回默认，不能让设备起不来 */
+        esp_err_t er = nvs_flash_erase();
+        if (er == ESP_OK) {
+            ret = nvs_flash_init();
+        } else {
+            ESP_LOGE(TAG, "NVS 擦除失败: %s", esp_err_to_name(er));
+            ret = er;
+        }
     }
-    ESP_ERROR_CHECK(ret);
+    if (ret != ESP_OK) {
+        /* 不 abort：NVS 坏了也要能开机（设置回默认值、Wi-Fi 历史不可用），
+         * 否则一次 NVS 故障就会变成「开机即重启」的死循环。 */
+        ESP_LOGE(TAG, "NVS 初始化失败: %s（设置与 Wi-Fi 历史可能不可用）",
+                 esp_err_to_name(ret));
+    }
 
     /* 2. LCD CS 拉高，防止 SPI 总线冲突 */
     lcd_cs_gpio_init();
@@ -99,7 +110,7 @@ void app_init_all(void)
     /* 4. SD 卡（失败不阻塞启动） */
     srv_sd_init();
 
-    /* 4.1 配置读取（/config.dat，缺失或损坏时用默认值） */
+    /* 4.1 配置读取（NVS；缺失/损坏时回默认值，旧 /config.dat 首次导入） */
     srv_config_init();
 
     /* 4.2 中文输入法自检：把「SD 卡上的词库/字库在不在、连续内存够不够」先打一行到日志上。
@@ -114,6 +125,11 @@ void app_init_all(void)
     /* 5.0.1 重力感应（复用上面初始化好的 QMI8658，给重力球用）。
      *       传感器没起来只会让重力类功能不可用，不阻塞启动。 */
     srv_motion_init();
+
+    /* 5.0.2 姿态 UDP 广播（电脑端 3D 显示）：按 NVS 里的开关启动 */
+    if (srv_config_get_int(CFG_MOTION_NET, 0) != 0) {
+        srv_motion_stream_set_enabled(true);
+    }
 
     /* 5.0 温湿度记录：按配置开关决定是否启动（每 10 分钟写一行到
      *     /temp-rec/YYYY/MM/DD.csv）。开关在「设置 → 记录」里，存 /config.dat，

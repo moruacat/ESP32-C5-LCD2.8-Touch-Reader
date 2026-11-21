@@ -5,6 +5,10 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 
+#ifdef ESP_PLATFORM
+#include "esp_vfs_spiffs.h"
+#endif
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,10 +119,73 @@ static void sug_insert(sug_item_t *items, int *n, const sug_item_t *item, int wl
 
 /* ===================== 路径与小工具 ===================== */
 
+/* Flash 内置词库分区：由 main/CMakeLists.txt 的 spiffs_create_partition_image()
+ * 把 flash_assets/dict/ 打进 `dict` 分区，启动后挂到 /flash。
+ * 查找顺序：SD 卡 /dict（完整 15.7 万词）→ 内置精简词库（约 12 万常用词）。
+ * 这样没插 SD 也能查词，插了 SD 则自动用完整版。 */
+#define DICT_FLASH_BASE     "/flash"
+#define DICT_FLASH_PART     "dict"
+
+#ifdef ESP_PLATFORM
+static bool s_flash_mounted = false;
+static bool s_flash_tried = false;
+
+static bool dict_flash_mount(void)
+{
+    if (s_flash_mounted) {
+        return true;
+    }
+    if (s_flash_tried) {
+        return false;           /* 分区不存在/挂载失败：不再每次查词都重试刷日志 */
+    }
+    s_flash_tried = true;
+
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path              = DICT_FLASH_BASE,
+        .partition_label        = DICT_FLASH_PART,
+        .max_files              = 4,
+        .format_if_mount_failed = false,
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "内置词库分区不可用（%s），只用 SD 词库", esp_err_to_name(ret));
+        return false;
+    }
+    s_flash_mounted = true;
+    ESP_LOGI(TAG, "内置词库分区已挂载到 %s", DICT_FLASH_BASE);
+    return true;
+}
+#endif
+
+/* 在 SD 与内置分区之间挑一个存在的文件；都没有返回 false（out 里是 SD 路径，便于日志） */
+static bool dict_pick_path(const char *name, char *out, size_t cap)
+{
+    snprintf(out, cap, "%s/dict/%s", srv_sd_mount_point(), name);
+    FILE *fp = fopen(out, "rb");
+    if (fp != NULL) {
+        fclose(fp);
+        return true;
+    }
+
+#ifdef ESP_PLATFORM
+    if (dict_flash_mount()) {
+        snprintf(out, cap, "%s/dict/%s", DICT_FLASH_BASE, name);
+        fp = fopen(out, "rb");
+        if (fp != NULL) {
+            fclose(fp);
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
 const char *srv_dict_path(void)
 {
     if (s_path_dat[0] == '\0') {
-        snprintf(s_path_dat, sizeof(s_path_dat), "%s/dict/dict.dat", srv_sd_mount_point());
+        if (!dict_pick_path("dict.dat", s_path_dat, sizeof(s_path_dat))) {
+            snprintf(s_path_dat, sizeof(s_path_dat), "%s/dict/dict.dat", srv_sd_mount_point());
+        }
     }
     return s_path_dat;
 }
@@ -731,20 +798,24 @@ static bool var_open(void)
     if (s_var_ready) {
         return true;
     }
-    if (!srv_sd_is_mounted()) {
-        return false;
-    }
 
     /* 文件可能后拷进来：失败不锁死，下次查询再试；只有第一次打日志 */
     const bool first_try = !s_var_tried;
     s_var_tried = true;
 
-    const char *mp = srv_sd_mount_point();
-    if (s_path_var[0] == '\0') {
-        snprintf(s_path_var, sizeof(s_path_var), "%s/dict/variants.dat", mp);
+    if (!dict_pick_path("variants.dat", s_path_var, sizeof(s_path_var))) {
+        if (first_try) {
+            ESP_LOGW(TAG, "没有变形表（SD 与内置分区都没有），用 tools/build_variants.py 生成");
+        }
+        return false;
     }
     char idx_path[80];
-    snprintf(idx_path, sizeof(idx_path), "%s/dict/variants.idx", mp);
+    if (!dict_pick_path("variants.idx", idx_path, sizeof(idx_path))) {
+        if (first_try) {
+            ESP_LOGW(TAG, "没有变形表索引（%s）", idx_path);
+        }
+        return false;
+    }
 
     FILE *fi = fopen(idx_path, "rb");
     if (fi == NULL) {
@@ -988,15 +1059,14 @@ esp_err_t srv_dict_init(void)
         dict_close();
     }
 
-    if (!srv_sd_is_mounted()) {
-        ESP_LOGW(TAG, "SD 未挂载，词典不可用");
-        return ESP_ERR_INVALID_STATE;
+    /* 词库来源：SD 卡（完整）优先，其次是 Flash 内置的精简词库。
+     * 两边都没有才认为不可用 —— 没有 SD 卡也能查常用词。 */
+    if (!dict_pick_path("dict.dat", s_path_dat, sizeof(s_path_dat)) ||
+        !dict_pick_path("dict.idx", s_path_idx, sizeof(s_path_idx))) {
+        ESP_LOGW(TAG, "找不到词库（SD 的 /dict 与 Flash 内置分区都没有）");
+        return ESP_ERR_NOT_FOUND;
     }
-
-    if (s_path_dat[0] == '\0') {
-        (void)srv_dict_path();
-        snprintf(s_path_idx, sizeof(s_path_idx), "%s/dict/dict.idx", srv_sd_mount_point());
-    }
+    ESP_LOGI(TAG, "词库来源：%s", s_path_dat);
 
     /* ---- 读索引 ---- */
     FILE *fi = fopen(s_path_idx, "rb");

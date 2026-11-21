@@ -1142,8 +1142,22 @@ class MainWindow(QMainWindow):
             "bootloader": str(self._last_download.get("bootloader") or ""),
             "partition_table": str(self._last_download.get("partition_table") or ""),
             "ota_data": str(self._last_download.get("ota_data") or ""),
+            "dict": "",
         }
-        missing = [Path(p) for key, p in paths.items() if key != "ota_data" and not Path(p).is_file()]
+
+        # 内置词库镜像：artifact 里没有时用本地一键生成的 build/dict.bin
+        # （tools/build_flash_dict.py 默认就输出到这里）。
+        dict_path = str(self._last_download.get("dict") or "").strip()
+        dict_from_local = False
+        if not dict_path:
+            local_dict = REPO_ROOT / "build" / "dict.bin"
+            if local_dict.is_file():
+                dict_path = str(local_dict)
+                dict_from_local = True
+        paths["dict"] = dict_path
+
+        missing = [Path(p) for key, p in paths.items()
+                   if key not in ("ota_data", "dict") and not Path(p).is_file()]
         if missing:
             QMessageBox.warning(self, "固件文件缺失",
                                 "下载目录中的固件文件不完整，请重新下载。")
@@ -1151,12 +1165,17 @@ class MainWindow(QMainWindow):
 
         run_id = self._last_download.get("run_id")
         sha = str(self._last_download.get("head_sha") or "")[:7]
+        if dict_path:
+            dict_note = "内置词库：有（%s）" % (
+                "本地 build/dict.bin" if dict_from_local else "运行产物")
+        else:
+            dict_note = "内置词库：无（查词回退 SD；可先跑 tools/build_flash_dict.py）"
         box = QMessageBox(self)
         box.setWindowTitle("确认烧录")
         box.setIcon(QMessageBox.Warning)
         box.setText(f"即将向 {port} 烧录固件")
         box.setInformativeText(
-            f"运行 #{run_id} · {sha}\n\n"
+            f"运行 #{run_id} · {sha}\n{dict_note}\n\n"
             "烧录会覆盖设备当前固件。请确认设备已连接，且烧录过程中不要断开。")
         yes = box.addButton("开始烧录", QMessageBox.AcceptRole)
         cancel = box.addButton("取消", QMessageBox.RejectRole)

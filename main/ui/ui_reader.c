@@ -2,6 +2,7 @@
 #include "ui_common.h"
 #include "ui_icons.h"
 #include "ui_dialog.h"
+#include "ui_font.h"
 #include "app_navigator.h"
 #include "srv_reader.h"
 #include "srv_library.h"
@@ -66,6 +67,9 @@ static int32_t     s_build_target = 0;      /* 页表要推到哪个字符偏移
 static int  s_line_space   = 6;     /*!< 行距（额外） */
 static int  s_letter_space = 0;     /*!< 字距 */
 static int  s_para_blanks  = 0;     /*!< 段间空行数 */
+static int  s_font_px      = 14;    /*!< 当前正文字号 */
+/*! 正文字体：14px 内嵌，16/20px 由 ui_font 从 SD 卡按需加载 */
+static const lv_font_t *s_font = NULL;
 
 /* 渲染/测量共用的膨胀缓冲：两者不同时用，省一份 RAM */
 static char s_expand_buf[PAGE_EXPANDED_MAX];
@@ -73,17 +77,20 @@ static char s_expand_buf[PAGE_EXPANDED_MAX];
 /**
  * @brief 读阅读设置
  *
- * 字号暂时没有对应字体（项目里只有 14px 汉字字体），所以没接进来；
- * read_font_size 配置保留着，等生成了多档字体再补。
+ * 字号：设置页只给可用档位（14/16/20）。字库文件不在 SD 上时自动回退
+ * 14px，不会出现「选了 20 但一点变化都没有」的假设置。
  */
 static void read_style_load(void)
 {
     s_line_space   = (int)srv_config_get_int(CFG_READ_LINE_SP, 6);
     s_letter_space = (int)srv_config_get_int(CFG_READ_LETTER_SP, 0);
 
+    s_font_px = (int)srv_config_get_int(CFG_READ_FONT_SIZE, 14);
+    s_font    = ui_read_font_get(s_font_px);
+
     /* 段距：LVGL 的 label 没有「段间距」，行高由字体定死，做不到像素级精确，
-     * 只能按整行近似 —— 段间多插几个空行。设置页里这一项是 10 一格，
-     * 这里 10 → 1 个空行，档位正好一一对应。 */
+     * 只能按整行近似 —— 段间多插几个空行。设置页里的段距步进是 10，
+     * 这里 10 → 1 个空行，档位一一对应。 */
     int ps = (int)srv_config_get_int(CFG_READ_PARA_SP, 0);
     s_para_blanks = ps / 10;
     if (s_para_blanks < 0) {
@@ -94,7 +101,7 @@ static void read_style_load(void)
 /* 正文和测量 label 的排版参数必须完全一致，否则量出来的高度不作数 */
 static void text_style_apply(lv_obj_t *lb)
 {
-    lv_obj_set_style_text_font(lb, &font_ui_14, 0);
+    lv_obj_set_style_text_font(lb, (s_font != NULL) ? s_font : (lv_font_t *)&font_ui_14, 0);
     lv_obj_set_style_text_line_space(lb, s_line_space, 0);
     lv_obj_set_style_text_letter_space(lb, s_letter_space, 0);
 }
@@ -1708,6 +1715,12 @@ static void reader_root_del_cb(lv_event_t *e)
     }
     s_auto_on   = false;
     s_auto_hold = false;
+
+    /* 真正退出阅读器才释放动态字库；转屏是原地重建（新页已建好、仍在用
+     * 同一个字体指针），这时释放会变成野指针。 */
+    if (app_navigator_current() != PAGE_READER) {
+        ui_read_font_release();
+    }
 }
 
 /**

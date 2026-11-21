@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static const char *TAG = "srv_player";
 
@@ -79,12 +80,22 @@ typedef struct {
     int32_t                       xing_dur_ms;   /*!< Xing/Info 头算出的时长；0 = 没有，退回码率估算 */
     srv_music_fmt_t               fmt;
     bool                          codec_open;
+    /*! WAV 走裸 PCM 直通：esp_audio_simple_dec 的 WAV 解码器要求开头是
+     *  RIFF 头，而播放器为了 seek 是从 data 块开始喂的（见 track_open），
+     *  直接喂解码器会报 "Not a WAV file"。WAV 本来就没有压缩，自己解析头
+     *  之后把 PCM 原样送给 I2S 最稳，也省一次解码。 */
+    bool                          raw_pcm;
 } track_t;
 
 static volatile srv_player_state_t s_state = SRV_PLAYER_IDLE;
 static volatile int32_t s_pos_ms = 0;
 static volatile int32_t s_dur_ms = 0;
 static volatile int32_t s_index  = -1;
+
+/* 单文件播放（录音机「听录音」用）：不经过媒体库/播放列表，队列里只有这一首。
+ * 播完不自动跳下一首，直接停。 */
+static bool        s_single_file = false;
+static srv_music_t s_single_item;
 
 static srv_player_mode_t s_mode    = SRV_PLAYER_MODE_LIST_LOOP;
 static int               s_list_id = 0;
@@ -181,6 +192,9 @@ static bool queue_is_library(void)
 
 static int queue_count(void)
 {
+    if (s_single_file) {
+        return srv_sd_is_mounted() ? 1 : 0;
+    }
     if (!srv_sd_is_mounted()) {
         return 0;
     }
@@ -194,6 +208,9 @@ static const srv_music_t *queue_item(int idx)
 {
     if (idx < 0) {
         return NULL;
+    }
+    if (s_single_file) {
+        return (idx == 0) ? &s_single_item : NULL;
     }
     const srv_music_t *m = NULL;
     if (queue_is_library()) {
@@ -541,6 +558,29 @@ static void track_emit(track_t *t, uint32_t bytes)
  */
 static int track_step(track_t *t)
 {
+    /* WAV：裸 PCM 直接送 I2S（不用解码器） */
+    if (t->raw_pcm) {
+        if (t->in_used >= t->in_len) {
+            if (t->eos) {
+                return 0;
+            }
+            if (!track_fill(t)) {
+                t->eos = true;
+                return 0;
+            }
+        }
+        /* 一次最多送 4KB：16kHz 单声道下这是 0.25 秒音频。整块 64KB 直接
+         * 写给 I2S 会阻塞两秒，停止/切歌要等很久。 */
+        const int left = t->in_len - t->in_used;
+        const int n = (left > 4096) ? 4096 : left;
+        if (n <= 0) {
+            return 0;
+        }
+        track_emit(t, (uint32_t)n);
+        t->in_used += n;
+        return 1;
+    }
+
     int empty_guard = 0;
 
     for (;;) {
@@ -657,7 +697,9 @@ static void track_seek(track_t *t, int32_t ms)
         fseek(t->fp, (long)target, SEEK_SET);
     }
 
-    esp_audio_simple_dec_reset(t->dec);
+    if (t->dec != NULL) {
+        esp_audio_simple_dec_reset(t->dec);      /* WAV 裸 PCM 没有解码器 */
+    }
     t->in_len   = 0;
     t->in_used  = 0;
     t->eos      = false;
@@ -669,6 +711,20 @@ static void track_seek(track_t *t, int32_t ms)
 /* 预热：先解出格式信息（PCM 丢弃），并定出总时长 */
 static bool track_prime(track_t *t)
 {
+    if (t->raw_pcm) {
+        /* 裸 PCM：参数已经由 wav_parse 拿到，时长按 data 字节数除以字节率算 */
+        uint32_t data_bytes = (t->file_size > t->data_off) ? (t->file_size - t->data_off) : 0;
+        const int frame = t->channels * (t->bits / 8);
+        if (t->sample_rate <= 0 || frame <= 0) {
+            return false;
+        }
+        int64_t ms = (int64_t)data_bytes * 1000 / ((int64_t)t->sample_rate * frame);
+        s_dur_ms = (ms > 0 && ms < 24LL * 3600 * 1000) ? (int32_t)ms : 0;
+        ESP_LOGI(TAG, "WAV 裸 PCM：%d Hz / %d 声道 / %d bit / %d 秒",
+                 t->sample_rate, t->channels, t->bits, (int)(s_dur_ms / 1000));
+        return true;
+    }
+
     for (int guard = 0; guard < 256; guard++) {
         esp_audio_simple_dec_info_t info;
         if (esp_audio_simple_dec_get_info(t->dec, &info) == ESP_AUDIO_ERR_OK &&
@@ -792,8 +848,12 @@ static track_t *track_open(const srv_music_t *m)
     if (m->fmt == SRV_MUSIC_FMT_WAV) {
         fseek(fp, 0L, SEEK_SET);
         t->data_off = wav_parse(fp, &t->sample_rate, &t->channels, &t->bits);
-        if (t->data_off == 0) {
-            ESP_LOGW(TAG, "WAV 头异常，按整文件处理: %s", m->path);
+        if (t->data_off > 0 && t->sample_rate > 0 && t->channels > 0 && t->bits > 0) {
+            /* 标准 PCM WAV：不再走解码器，直接按裸 PCM 播 */
+            t->raw_pcm = true;
+        } else {
+            ESP_LOGW(TAG, "WAV 头异常，退回解码器: %s", m->path);
+            t->data_off = 0;
         }
     } else if (m->fmt == SRV_MUSIC_FMT_MP3) {
         /* 跳过 ID3v2 等标签直接从音频帧开始喂解码器，顺带取 Xing 里的精确时长 */
@@ -804,16 +864,18 @@ static track_t *track_open(const srv_music_t *m)
     }
     fseek(fp, (long)t->data_off, SEEK_SET);
 
-    esp_audio_simple_dec_cfg_t cfg = {
-        .dec_type      = type,
-        .dec_cfg       = NULL,
-        .cfg_size      = 0,
-        .use_frame_dec = false,
-    };
-    if (esp_audio_simple_dec_open(&cfg, &t->dec) != ESP_AUDIO_ERR_OK) {
-        ESP_LOGE(TAG, "解码器打开失败: %s", m->path);
-        track_close(t);
-        return NULL;
+    if (!t->raw_pcm) {
+        esp_audio_simple_dec_cfg_t cfg = {
+            .dec_type      = type,
+            .dec_cfg       = NULL,
+            .cfg_size      = 0,
+            .use_frame_dec = false,
+        };
+        if (esp_audio_simple_dec_open(&cfg, &t->dec) != ESP_AUDIO_ERR_OK) {
+            ESP_LOGE(TAG, "解码器打开失败: %s", m->path);
+            track_close(t);
+            return NULL;
+        }
     }
 
     t->in_buf  = big_malloc(IN_BUF_BYTES);
@@ -877,6 +939,9 @@ static track_t *track_open(const srv_music_t *m)
 
 static int32_t pick_next(bool manual)
 {
+    if (s_single_file) {
+        return -1;                  /* 单文件播放：播完就停，不循环 */
+    }
     int n = queue_count();
     if (n <= 0) {
         return -1;
@@ -904,6 +969,9 @@ static int32_t pick_next(bool manual)
 
 static int32_t pick_prev(void)
 {
+    if (s_single_file) {
+        return 0;
+    }
     int n = queue_count();
     if (n <= 0) {
         return -1;
@@ -930,6 +998,12 @@ static int32_t pick_prev(void)
 
 esp_err_t srv_player_save_progress(bool force)
 {
+    /* 录音机/文件管理器里的单文件播放不写音乐进度，免得下次进音乐页
+     * 去恢复一个媒体库里不存在的曲目 */
+    if (s_single_file) {
+        return ESP_OK;
+    }
+
     srv_progress_music_t p;
     memset(&p, 0, sizeof(p));
     p.playlist    = s_list_id;
@@ -1110,6 +1184,7 @@ esp_err_t srv_player_init(void)
 
 esp_err_t srv_player_play_playlist(int list_id, int index)
 {
+    s_single_file = false;
     if (srv_musiclib_playlist_open(list_id) != ESP_OK) {
         return ESP_FAIL;
     }
@@ -1125,8 +1200,74 @@ esp_err_t srv_player_play_playlist(int list_id, int index)
     return ESP_OK;
 }
 
+/* 扩展名 → 格式（录音机页传进来的是普通文件路径，不走媒体库） */
+static srv_music_fmt_t fmt_of_path(const char *path)
+{
+    const char *dot = strrchr(path, '.');
+    if (dot == NULL || dot[1] == '\0') {
+        return SRV_MUSIC_FMT_UNKNOWN;
+    }
+    const char *ext = dot + 1;
+    if (strcasecmp(ext, "wav") == 0)  return SRV_MUSIC_FMT_WAV;
+    if (strcasecmp(ext, "mp3") == 0)  return SRV_MUSIC_FMT_MP3;
+    if (strcasecmp(ext, "aac") == 0)  return SRV_MUSIC_FMT_AAC;
+    if (strcasecmp(ext, "m4a") == 0)  return SRV_MUSIC_FMT_M4A;
+    if (strcasecmp(ext, "flac") == 0) return SRV_MUSIC_FMT_FLAC;
+    if (strcasecmp(ext, "ogg") == 0 || strcasecmp(ext, "opus") == 0) return SRV_MUSIC_FMT_OGG;
+    if (strcasecmp(ext, "amr") == 0)  return SRV_MUSIC_FMT_AMR;
+    if (strcasecmp(ext, "ts") == 0)   return SRV_MUSIC_FMT_TS;
+    return SRV_MUSIC_FMT_UNKNOWN;
+}
+
+esp_err_t srv_player_play_file(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!srv_sd_is_mounted()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const srv_music_fmt_t fmt = fmt_of_path(path);
+    if (fmt == SRV_MUSIC_FMT_UNKNOWN) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    fseek(fp, 0L, SEEK_END);
+    const long sz = ftell(fp);
+    fclose(fp);
+    if (sz <= 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(&s_single_item, 0, sizeof(s_single_item));
+    s_single_item.fmt      = fmt;
+    s_single_item.size     = (uint32_t)sz;
+    s_single_item.external = true;
+    snprintf(s_single_item.path, sizeof(s_single_item.path), "%s", path);
+
+    const char *base = strrchr(path, '/');
+    base = (base != NULL) ? base + 1 : path;
+    snprintf(s_single_item.name, sizeof(s_single_item.name), "%s", base);
+    char *dot = strrchr(s_single_item.name, '.');
+    if (dot != NULL && dot != s_single_item.name) {
+        *dot = '\0';
+    }
+
+    s_single_file = true;
+    s_list_id     = 0;
+    s_index       = 0;
+    post_cmd(CMD_PLAY, 0);
+    return ESP_OK;
+}
+
 esp_err_t srv_player_set_playlist(int list_id)
 {
+    s_single_file = false;      /* 只要走列表/媒体库，就退出单文件模式 */
     if (list_id < 1 || srv_musiclib_playlist_open(list_id) != ESP_OK) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1153,6 +1294,7 @@ esp_err_t srv_player_set_playlist(int list_id)
 
 esp_err_t srv_player_play_index(int index)
 {
+    s_single_file = false;
     if (queue_item(index) == NULL) {
         return ESP_ERR_INVALID_ARG;
     }

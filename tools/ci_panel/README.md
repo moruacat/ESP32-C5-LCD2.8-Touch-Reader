@@ -49,6 +49,26 @@ build/ci/run-<run_id>/
 
 其中包含 `clock_reader.bin`、bootloader、分区表和 OTA 数据。`build/` 已在 `.gitignore` 中。
 
+## 内置词库（dict 分区）
+
+CI 构建没有 `flash_assets/`，所以 artifact 里通常没有 `dict.bin`。词库在本地一键生成：
+
+```powershell
+python tools/build_flash_dict.py
+```
+
+默认会生成：
+
+- `flash_assets/dict/`：裁剪后的词库（约 7.5MB）
+- `build/dict.bin`：9MB SPIFFS 镜像（dict 分区内容）
+
+烧录时面板会优先用 artifact 里的 `dict.bin`，没有就自动找项目根目录的
+`build/dict.bin`，并追加到 `0x1220000`。确认框会显示「内置词库：有/无」。
+没有 `build/dict.bin` 时只烧 app/分区表，设备查词回退 SD 卡 `/dict`。
+
+> 分区表在 1.5.4 有变化（新增 dict 分区）。第一次刷完新分区表后，若没烧
+> `dict.bin`，dict 分区是空的，属于正常现象；再按上面的命令生成并重新烧一次即可。
+
 ## 烧录
 
 GUI 会自动查找以下位置的 `esptool.exe`：
@@ -69,5 +89,6 @@ C:\Espressif\tools\python\*\venv\Scripts\esptool.exe
 | partition-table.bin | 0x8000 |
 | ota_data_initial.bin | 0xf000 |
 | clock_reader.bin | 0x20000 |
+| dict.bin（可选，本地生成） | 0x1220000 |
 
 烧录前会再次确认，烧录过程中请勿断开设备。

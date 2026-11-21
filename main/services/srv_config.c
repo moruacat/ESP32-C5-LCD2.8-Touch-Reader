@@ -5,6 +5,11 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#ifdef ESP_PLATFORM
+#include "nvs.h"
+#include "nvs_flash.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -15,6 +20,27 @@ static const char *TAG = "srv_config";
 /* 延时落盘：最后一次修改后 2 秒写盘，避免拖动亮度条时高频写 SD */
 #define SAVE_DELAY_US   (2 * 1000 * 1000)
 #define CFG_LINE_MAX    192
+
+/* ===================== 存储后端 =====================
+ *
+ * 真机把整份配置存进 NVS（Flash 的 nvs 分区）：
+ *   - 不依赖 SD 卡，拔卡/弹出 SD 都不影响设置
+ *   - NVS 每条记录自带 CRC，只写成功一半也不会读到半份配置
+ *   - 读取失败（magic/版本/长度/CRC 任一不对）一律回默认值，不阻塞启动，
+ *     所以配置文件坏掉不会造成「读到坏配置 -> 崩溃 -> 重启」的死循环
+ *
+ * 旧版本存在 SD 的 /config.dat：第一次启动（NVS 里还没有有效配置）时
+ * 自动导入一次，之后以 NVS 为准，旧文件保留但不再写。PC 模拟器没有 NVS，
+ * 继续用文件后端。
+ */
+
+#ifdef ESP_PLATFORM
+#define CFG_NVS_NAMESPACE   "clockcfg"
+#define CFG_NVS_KEY         "data"
+#endif
+
+#define CFG_BLOB_MAGIC      0x31474643u     /*!< "CFG1" 小端 */
+#define CFG_BLOB_VERSION    1u
 
 typedef enum {
     CFG_I32 = 0,
@@ -110,6 +136,8 @@ static const cfg_field_t s_fields[] = {
 
     /* 游戏：重力感应方向校正（bit0 左右 / bit1 上下 / bit2 交换轴），默认不校正 */
     I32(CFG_MOTION_FLIP,     motion_flip,      0,      0, 7),
+    /* 姿态 UDP 广播：默认关，在「设置 → 关于」里打开 */
+    I32(CFG_MOTION_NET,      motion_net,       0,      0, 1),
 
     /* 计时器 / 倒计时 */
     /* 到点提示音默认开；开关状态存在这里，界面上改一次就跟着落盘 */
@@ -140,8 +168,111 @@ static bool               s_dirty  = false;
 static bool               s_loaded = false;
 static esp_timer_handle_t s_save_timer;
 static char               s_path[64];
+/*! SD 上的旧配置文件；只用于「首次迁移」和模拟器后端 */
+static char               s_file_path[64];
 
 /* ===================== 内部工具 ===================== */
+
+#ifdef ESP_PLATFORM
+/* NVS 里的整包结构。CRC 覆盖 srv_config_t 的原始字节，读出来先验再 memcpy，
+ * 任何一项对不上都当没有配置 —— 这样坏数据绝不会进到运行时配置里。 */
+typedef struct {
+    uint32_t     magic;
+    uint32_t     version;
+    uint32_t     size;
+    uint32_t     crc;
+    srv_config_t cfg;
+} cfg_blob_t;
+
+static uint32_t crc32_calc(const void *data, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= p[i];
+        for (int k = 0; k < 8; k++) {
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1)));
+        }
+    }
+    return ~crc;
+}
+
+/* ===================== NVS 后端（真机） ===================== */
+
+static esp_err_t nvs_cfg_load(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(CFG_NVS_NAMESPACE, NVS_READONLY, &h);
+    if (err != ESP_OK) {
+        return err;                 /* ESP_ERR_NVS_NOT_FOUND = 从没存过 */
+    }
+
+    size_t len = 0;
+    err = nvs_get_blob(h, CFG_NVS_KEY, NULL, &len);
+    if (err != ESP_OK) {
+        nvs_close(h);
+        return err;
+    }
+    if (len != sizeof(cfg_blob_t)) {
+        nvs_close(h);
+        ESP_LOGW(TAG, "NVS 配置长度 %u 与当前结构 %u 不符，回默认值",
+                 (unsigned)len, (unsigned)sizeof(cfg_blob_t));
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    cfg_blob_t *b = malloc(sizeof(cfg_blob_t));
+    if (b == NULL) {
+        nvs_close(h);
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = nvs_get_blob(h, CFG_NVS_KEY, b, &len);
+    nvs_close(h);
+    if (err != ESP_OK) {
+        free(b);
+        return err;
+    }
+
+    if (b->magic != CFG_BLOB_MAGIC || b->version != CFG_BLOB_VERSION ||
+        b->size != sizeof(srv_config_t) ||
+        b->crc != crc32_calc(&b->cfg, sizeof(b->cfg))) {
+        ESP_LOGE(TAG, "NVS 配置校验失败（magic/版本/长度/CRC），回默认值");
+        free(b);
+        return ESP_ERR_INVALID_CRC;
+    }
+
+    memcpy(&s_cfg, &b->cfg, sizeof(s_cfg));
+    free(b);
+    return ESP_OK;
+}
+
+static esp_err_t nvs_cfg_save(void)
+{
+    cfg_blob_t *b = malloc(sizeof(cfg_blob_t));
+    if (b == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    b->magic   = CFG_BLOB_MAGIC;
+    b->version = CFG_BLOB_VERSION;
+    b->size    = sizeof(srv_config_t);
+    memcpy(&b->cfg, &s_cfg, sizeof(s_cfg));
+    b->crc     = crc32_calc(&b->cfg, sizeof(b->cfg));
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(CFG_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(h, CFG_NVS_KEY, b, sizeof(cfg_blob_t));
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+
+    free(b);
+    return err;
+}
+#endif /* ESP_PLATFORM */
 
 static int32_t *as_i32(const cfg_field_t *f)
 {
@@ -251,9 +382,9 @@ static void save_timer_cb(void *arg)
 /* 从 /config.dat 载入；文件缺失或损坏时保持默认值并把 dirty 置位 */
 static esp_err_t load_from_file(void)
 {
-    FILE *fp = fopen(s_path, "r");
+    FILE *fp = fopen(s_file_path, "r");
     if (fp == NULL) {
-        ESP_LOGW(TAG, "%s 不存在，使用默认值", s_path);
+        ESP_LOGW(TAG, "%s 不存在，使用默认值", s_file_path);
         s_dirty = true;
         return ESP_ERR_NOT_FOUND;
     }
@@ -268,7 +399,7 @@ static esp_err_t load_from_file(void)
     fclose(fp);
 
     if (applied == 0) {
-        ESP_LOGE(TAG, "%s 为空或已损坏，回退到默认值", s_path);
+        ESP_LOGE(TAG, "%s 为空或已损坏，回退到默认值", s_file_path);
         apply_defaults();
         s_dirty = true;
         return ESP_ERR_INVALID_STATE;
@@ -276,7 +407,7 @@ static esp_err_t load_from_file(void)
 
     if (applied < (int)FIELD_COUNT) {
         ESP_LOGW(TAG, "%s 仅 %d/%d 项有效，缺失项用默认值补齐",
-                 s_path, applied, (int)FIELD_COUNT);
+                 s_file_path, applied, (int)FIELD_COUNT);
         s_dirty = true;
     }
 
@@ -286,7 +417,14 @@ static esp_err_t load_from_file(void)
 
 esp_err_t srv_config_init(void)
 {
-    snprintf(s_path, sizeof(s_path), "%s/config.dat", BSP_SD_MOUNT_POINT);
+    snprintf(s_file_path, sizeof(s_file_path), "%s/config.dat", BSP_SD_MOUNT_POINT);
+
+#ifdef ESP_PLATFORM
+    /* 真机：设置存 NVS（Flash 的 nvs 分区），不再依赖 SD 卡 */
+    snprintf(s_path, sizeof(s_path), "nvs:%s/%s", CFG_NVS_NAMESPACE, CFG_NVS_KEY);
+#else
+    snprintf(s_path, sizeof(s_path), "%s", s_file_path);
+#endif
 
     if (s_save_timer == NULL) {
         const esp_timer_create_args_t args = {
@@ -300,18 +438,36 @@ esp_err_t srv_config_init(void)
 
     esp_err_t ret = ESP_OK;
 
+#ifdef ESP_PLATFORM
+    ret = nvs_cfg_load();
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "配置从 NVS 载入");
+    } else {
+        /* NVS 里没有（或坏了）：尝试把旧版 SD 上的 /config.dat 导入一次。
+         * 导入失败就用默认值，绝不因为配置读不出来而卡住启动。 */
+        ESP_LOGW(TAG, "NVS 配置不可用（%s），尝试导入旧 %s",
+                 esp_err_to_name(ret), s_file_path);
+        if (srv_sd_is_mounted()) {
+            if (load_from_file() == ESP_OK) {
+                ESP_LOGI(TAG, "旧配置导入成功，之后以 NVS 为准");
+            }
+        }
+        s_dirty = true;
+    }
+#else
     if (!srv_sd_is_mounted()) {
         ESP_LOGW(TAG, "SD 未挂载，配置仅驻留内存（挂载后需调用 srv_config_save）");
         s_dirty = true;
     } else {
         ret = load_from_file();
     }
+#endif
 
     s_loaded = true;
 
-    /* 首次启动或文件有缺失时写回一份完整配置，方便用户手工编辑 */
-    if (s_dirty && srv_sd_is_mounted()) {
-        srv_config_save();
+    /* 首次启动 / 配置有缺失时立刻写回一份完整配置 */
+    if (s_dirty) {
+        (void)srv_config_save();
     }
 
     srv_config_dump();
@@ -409,16 +565,27 @@ esp_err_t srv_config_save(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+#ifdef ESP_PLATFORM
+    esp_err_t ret = nvs_cfg_save();
+    if (ret != ESP_OK) {
+        s_dirty = true;
+        ESP_LOGE(TAG, "写入 NVS 失败: %s（设置暂存内存）", esp_err_to_name(ret));
+        return ret;
+    }
+    s_dirty = false;
+    ESP_LOGI(TAG, "配置已保存到 NVS");
+    return ESP_OK;
+#else
     if (!srv_sd_is_mounted()) {
         s_dirty = true;
         ESP_LOGW(TAG, "SD 未挂载，配置暂存内存");
         return ESP_ERR_INVALID_STATE;
     }
 
-    FILE *fp = fopen(s_path, "w");
+    FILE *fp = fopen(s_file_path, "w");
     if (fp == NULL) {
         s_dirty = true;
-        ESP_LOGE(TAG, "无法写入 %s", s_path);
+        ESP_LOGE(TAG, "无法写入 %s", s_file_path);
         return ESP_FAIL;
     }
 
@@ -435,8 +602,9 @@ esp_err_t srv_config_save(void)
 
     fclose(fp);
     s_dirty = false;
-    ESP_LOGI(TAG, "配置已保存到 %s", s_path);
+    ESP_LOGI(TAG, "配置已保存到 %s", s_file_path);
     return ESP_OK;
+#endif
 }
 
 void srv_config_save_deferred(void)

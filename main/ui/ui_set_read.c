@@ -2,30 +2,38 @@
 #include "ui_common.h"
 #include "ui_icons.h"
 #include "ui_dialog.h"
+#include "ui_font.h"
 #include "app_navigator.h"
 #include "srv_config.h"
 
 #include <stdio.h>
+#include <string.h>
 
 /**
  * @brief 一个可加减的阅读参数
  *
- * 没有「字号」：字号需要多档汉字字体（目前只有 14px 一款），
- * 生成好字体再接进来，否则又是改了不起作用的假设置。
+ * 字号走「循环档位」：+/- 都切到下一个可用档位（14 → 16 → 20 → 14）。
+ * 16/20 需要 SD 卡 /fonts 下的字库文件，没有文件时自动跳过，不会出现
+ * 「选了却不起作用」的档位。
  */
 typedef struct {
     const char           *name;
     const char           *key;
     const lv_image_dsc_t *icon;
-    int                   step;     /*!< 每次加减的量 */
+    int                   step;     /*!< 每次加减的量；0 = 按字号档位循环 */
     int                   def;      /*!< 默认值（「恢复默认」用） */
+    int                   div;      /*!< 显示时除以几（段距存的是像素，按 1 格 = 10px 显示） */
+    const char           *unit;     /*!< 数值后面的单位 */
 } read_item_t;
 
 static const read_item_t s_items[] = {
-    {"字距", CFG_READ_LETTER_SP, &ic_letter_spacing,     1,  0},
-    {"行距", CFG_READ_LINE_SP,   &ic_line_spacing,       1,  6},
-    /* 段距一格 1：按行内像素微调，想多大就多大 */
-    {"段距", CFG_READ_PARA_SP,   &ic_paragraph_spacing,  1,  0},
+    {"字号", CFG_READ_FONT_SIZE, &ic_book_open,          0, 14, 1, "px"},
+    {"字距", CFG_READ_LETTER_SP, &ic_letter_spacing,     1,  0, 1, ""},
+    {"行距", CFG_READ_LINE_SP,   &ic_line_spacing,       1,  6, 1, ""},
+    /* 段距用「段间空行数」实现，最小单位就是一行；所以界面也只能按整行调，
+     * 每次 10px（= 1 格 = 1 个空行）。以前步进 1、阅读器再除 10，非整十的
+     * 值会被截断，看起来就是「1~9 都不生效」。现在界面值都落在 10 的倍数上。 */
+    {"段距", CFG_READ_PARA_SP,   &ic_paragraph_spacing, 10, 0, 10, "格"},
 };
 
 #define ITEM_COUNT  (sizeof(s_items) / sizeof(s_items[0]))
@@ -38,7 +46,20 @@ static void read_refresh(void)
 {
     for (int i = 0; i < (int)ITEM_COUNT; i++) {
         char buf[16];
-        snprintf(buf, sizeof(buf), "%d", (int)srv_config_get_int(s_items[i].key, s_items[i].def));
+        const int raw = (int)srv_config_get_int(s_items[i].key, s_items[i].def);
+        int shown = (s_items[i].div > 1) ? raw / s_items[i].div : raw;
+
+        /* 字库文件被删掉/没拷进卡时，显示实际会用的 14px，别骗用户 */
+        if (strcmp(s_items[i].key, CFG_READ_FONT_SIZE) == 0 &&
+            !ui_read_font_available(raw)) {
+            shown = 14;
+        }
+
+        if (s_items[i].unit[0] != '\0') {
+            snprintf(buf, sizeof(buf), "%d%s", shown, s_items[i].unit);
+        } else {
+            snprintf(buf, sizeof(buf), "%d", shown);
+        }
         lv_label_set_text(s_val_lb[i], buf);
     }
 
@@ -57,6 +78,16 @@ static void on_step(lv_event_t *e)
     int dir    = (packed & 1) ? 1 : -1;
 
     const read_item_t *it = &s_items[idx];
+
+    if (it->step == 0) {
+        /* 字号：两个方向都是「切到下一个可用档位」 */
+        (void)dir;
+        int cur = (int)srv_config_get_int(it->key, it->def);
+        (void)srv_config_set_int(it->key, ui_read_font_next(cur), true);
+        read_refresh();
+        return;
+    }
+
     int v = (int)srv_config_get_int(it->key, it->def) + dir * it->step;
     srv_config_set_int(it->key, v, true);      /* 越界会被 srv_config 夹住 */
 

@@ -10,6 +10,7 @@
 #include "srv_library.h"
 #include "srv_musiclib.h"
 #include "srv_player.h"
+#include "srv_motion.h"
 
 #include "esp_app_desc.h"
 #include "esp_log.h"
@@ -51,7 +52,9 @@ static void on_pop_ok(void *arg)
 static void on_pop_click(lv_event_t *e)
 {
     (void)e;
-    ui_dialog_confirm("弹出 SD 卡？", "弹出后书籍与设置都无法读写",
+    /* 不再提「书籍」，避免书架上出现「SD 已弹出」的警告提示；只说明弹出后
+     * 卡本身不可读写即可。设置已经改存到 Flash，不受弹出影响。 */
+    ui_dialog_confirm("弹出 SD 卡？", "弹出后 SD 卡将无法读写",
                       "弹出", on_pop_ok, NULL);
 }
 
@@ -109,6 +112,16 @@ static void on_fast_home_switch(lv_event_t *e)
     lv_obj_t *sw = lv_event_get_target(e);
     const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
     srv_config_set_int(CFG_FAST_HOME, on ? 1 : 0, true);
+}
+
+/* 姿态 UDP 广播：同一个 WiFi 下电脑跑 tools/motion3d 就能看到 3D 动作 */
+static void on_motion_net_switch(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    srv_config_set_int(CFG_MOTION_NET, on ? 1 : 0, true);
+    srv_motion_stream_set_enabled(on);
+    ESP_LOGI(TAG, "姿态广播 %s", on ? "开" : "关");
 }
 
 static void on_safe_switch(lv_event_t *e)
@@ -175,6 +188,13 @@ void ui_set_about_create(lv_obj_t *root)
                                   srv_config_get_int(CFG_FAST_HOME, CFG_DEF_FAST_HOME) != 0,
                                   on_fast_home_switch, NULL);
     }
+
+    /* 姿态广播：陀螺仪数据通过 UDP 广播到同一局域网，电脑端 3D 显示。
+     * 默认关；打开后约 30Hz 发一帧，关掉就完全退出任务。 */
+    row = ui_row_create(list, UI_ROW_Y(next++), &ic_rotate, "姿态广播");
+    (void)ui_row_switch_create(row,
+                              srv_config_get_int(CFG_MOTION_NET, 0) != 0,
+                              on_motion_net_switch, NULL);
 
     if (show_safe) {
         row = ui_row_create(list, UI_ROW_Y(next++), &ic_warning, "安全模式");

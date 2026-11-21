@@ -30,16 +30,20 @@
 - 阅读长按菜单：封面、简介、跳转、自动翻页。
 - 自动翻页间隔可输入秒数（5~600 秒），正文顶部细线显示进度。
 - 断点续读、阅读字号 / 字距 / 行距 / 段距设置；阅读器跟随全局横竖屏方向，长按菜单里也能切换。
+- 字号支持 **14 / 16 / 20px**：14px 内嵌在固件里，16/20px 用 `tools/gen_read_fonts.py` 生成的 `.bin` 字库，放到 SD 卡 `/fonts` 即可在「设置 → 阅读 → 字号」循环切换（没有字库时自动只有 14px，不会出现假选项）。
+- 段距按「格」调节（1 格 = 段间 1 个空行），所有可选值都真实生效。
 - 书架双列卡片、最近阅读排序、长按移出书架。
 - 书架竖屏（270°）自动切换为单列卡片。
+- 转屏不会重扫书架、不会清空单词搜索、不会重连小智 AI。
 
 ### 词典与单词学习
 
-- 离线英汉词典，约 15 万词条。
+- 离线英汉词典，SD 卡完整版约 15.7 万词条。
 - 中英双向查询、词形还原、变形查询、拼写建议。
 - 词级直译、相关短语、考试徽章。
 - 单词书单元学习、认识 / 不认识计分、错词本。
 - 中文词库查询支持拼音、前缀匹配。
+- **Flash 内置词库**：`tools/build_flash_dict.py` 从完整词库裁出约 12 万常用词（7.5MB）打进 `dict` 分区，没插 SD 卡也能查词；SD 卡上有完整词库时优先用 SD 的。分区镜像在构建时由 `spiffs_create_partition_image()` 生成。
 - 单词页跟随全局横竖屏方向（单词主页、变形查询和学习页共用），竖屏下输入键盘贴底显示。
 
 > 当前未集成拼音输入法。界面输入以英文 / ASCII 为主，中文词库仍可通过拼音查询。
@@ -47,6 +51,8 @@
 ### 音乐、电台与录音
 
 - 扫描 `/music`，支持播放列表、上一曲 / 下一曲 / 暂停、进度和音量。
+- WAV（包括录音机录出来的 16kHz 单声道）按裸 PCM 直通播放；此前 WAV 会被当成「没有文件头」而解码失败。
+- 录音机页列出 `/record/rec-N.wav`，点一条就能试听/停止，不用离开页面。
 - 音乐页跟随全局横竖屏方向；播放列表、选曲层和音量层会跟随布局。
 - 中国之声 HLS 在线电台。
 - ES8311 麦克风录音，保存为 WAV。
@@ -66,6 +72,13 @@
 - `/photos` 下扫描 RGB565 `.raw` 照片，全屏左右滑动浏览。
 - 支持照片密码和照片转换工具。
 - 内置 2048、贪吃蛇、五子棋、画板、重力球、足球等小游戏。
+
+### 姿态广播（电脑端 3D）
+
+- 在「设置 → 关于 → 姿态广播」打开后，设备通过 UDP 4210 端口约 30Hz 广播四元数、加速度和角速度。
+- 电脑端运行 `tools/motion3d/motion_view.py`（PyQt5 + numpy），实时显示外壳模型跟随设备旋转，并按加速度积分显示位移。
+- 默认是简化外壳；用 `tools/motion3d/convert_step.py` 可以把 STEP 外壳转成 `model.obj` 后自动加载（面数上限 2 万，超了会拒绝，避免软件渲染卡死）。
+- 详见 [`tools/motion3d/README.md`](tools/motion3d/README.md)。
 
 ### 时间与 NTP
 
@@ -104,18 +117,24 @@
 - LVGL：**9.6.0**
 - LVGL 适配层：`espressif/esp_lvgl_adapter` 0.4.x
 - 工程名：`clock_reader`
+- 当前版本：**1.5.4**（根 `CMakeLists.txt` 的 `PROJECT_VER`）
 - 分区：
 
 ```text
 factory  6 MB
-fonts    4 MB SPIFFS
-storage  5 MB SPIFFS
+ota_0    6 MB
+ota_1    6 MB
+dict     9 MB SPIFFS（内置词库，构建时生成）
 ```
+
+> 设置不再存 SD 卡：整份配置打包写进 Flash 的 `nvs` 分区（带 magic / 版本 / 长度 / CRC32 校验），
+> 读坏了自动回默认值，不会因为配置文件损坏而反复重启。旧的 `/config.dat` 只在首次启动时导入一次。
 
 固件编译产物：
 
 ```text
 build/clock_reader.bin
+build/dict.bin          # flash_assets 存在时才生成
 ```
 
 ---
@@ -144,6 +163,9 @@ build/clock_reader.bin
 ```
 
 > 脚本会导入 ESP-IDF 环境，并使用 `idf.py --no-ccache`。沙箱 / 杀毒软件环境下 ccache 可能卡死，不建议省略 `--no-ccache`。
+>
+> **1.5.4 改了分区表**（`fonts`/`storage` 合并成 9MB 的 `dict`），第一次必须完整烧录一次；
+> 之后只烧 app（`-AppOnly`）即可。OTA 也不会更新分区表。
 
 ### 方式二：手动 IDF 命令
 
@@ -159,6 +181,22 @@ idf.py --no-ccache -p COM20 app-flash monitor
 ```
 
 串口通常是 USB-Serial-JTAG，具体端口以设备管理器为准。
+
+### CI（GitHub Actions）
+
+`.github/workflows/build.yml` 在 push / PR 时用 `espressif/idf:v6.1` 容器跑一次真机编译
+（`idf.py reconfigure` + `idf.py build`）。改完代码推送后看 Actions 结果即可，不需要本地
+装 IDF 也能验证编译。
+
+CI 构建没有 `flash_assets/`，artifact 里不含内置词库镜像。词库在本地一键生成：
+
+```powershell
+python tools/build_flash_dict.py
+```
+
+它会生成 `flash_assets/dict/` 与 `build/dict.bin`（9MB SPIFFS 镜像）。用
+`tools/ci_panel` 烧录 CI 固件时，面板会自动检测并追加 `build/dict.bin` 到
+`0x1220000`；没有这个文件时只烧固件，查词回退 SD 卡。
 
 ---
 
@@ -202,23 +240,26 @@ GitHub Token 只保存在本机，勾选「记住 Token」后使用 Windows DPAP
 
 ## SD 卡目录
 
-设备启动时从 SD 卡读取配置和素材。常用目录：
+设备启动时从 SD 卡读取书籍、词库和素材。设置已经改存 Flash（NVS），不再依赖 SD 卡。常用目录：
 
 ```text
 SD/
-├── config.dat              # 设备配置，自动生成
+├── config.dat              # 旧版设置（只在本版第一次启动时导入 NVS，之后不再写）
 ├── wifi.dat                # WiFi 历史，自动生成
 ├── books/                  # TXT / EBF 电子书
-├── dict/                   # 离线词典数据
+├── dict/                   # 完整离线词典（优先于 Flash 内置词库）
 │   ├── dict.dat
 │   ├── dict.idx
 │   ├── variants.dat
 │   ├── variants.idx
 │   └── ...
-├── music/                  # MP3 音乐
+├── fonts/                  # 阅读器多档字号字库
+│   ├── font_ui_16.bin
+│   └── font_ui_20.bin
+├── music/                  # MP3 / WAV 音乐
 ├── words/                  # 单词书单元
 ├── photos/                 # RGB565 .raw 照片
-├── record/                 # 录音 WAV
+├── record/                 # 录音 WAV（录音机页可直接回放）
 └── temp-rec/               # 温湿度记录 YYYY/MM/DD.csv
 ```
 
@@ -234,13 +275,16 @@ SD/
 | `tools/epub2ebf/` | EPUB 转换命令行 / GUI |
 | `tools/photo2raw/` | 图片转 RGB565 RAW |
 | `tools/build_dict.py` | 构建离线英汉词典 |
+| `tools/build_flash_dict.py` | 从完整词库裁出 Flash 内置常用词库，并一键生成 `build/dict.bin` |
 | `tools/build_zh_dict.py` | 构建中英双向词典 |
 | `tools/build_variants.py` | 构建词形 / 变形数据 |
 | `tools/build_wordbook.py` | 生成单词书数据 |
 | `tools/check_dict.py` | 检查词典格式、排序与索引 |
 | `tools/dict_probe.py` | PC 端复刻设备查词算法 |
-| `tools/gen_font.py` | 根据汉字表重新生成字体 |
+| `tools/gen_font.py` | 根据汉字表重新生成内置 14px 字体 |
+| `tools/gen_read_fonts.py` | 生成阅读器 16/20px 的 `.bin` 字库 |
 | `tools/png2lvgl.py` | PNG 图标转换为 LVGL C 数组 |
+| `tools/motion3d/` | 电脑端姿态 3D 显示（UDP + PyQt5）与 STEP→OBJ 转换 |
 
 示例：
 
@@ -324,12 +368,18 @@ sim/                        # PC 模拟器（本地，不纳入 Git）
 
 - 拼音输入法已移除，界面中文输入仍受限。
 - 天气显示尚未实现。
-- 横竖屏方向是**一个全局值**：除时钟、日历、游戏页（锁定横屏）外，所有页面共用，标题栏右端的小图标切换，方向持久化到 `config.dat` 的 `rot`。旧配置里的 `rot_bookshelf` / `rot_words` / `rot_music` 会自动迁移到 `rot`。竖屏下页面按 240x320 重新排版（列表行、卡片、键盘、弹层都跟随当前逻辑分辨率）。
+- 横竖屏方向是**一个全局值**：除时钟、日历、游戏页（锁定横屏）外，所有页面共用，标题栏右端的小图标切换，方向持久化到 NVS 的 `rot`。旧配置里的 `rot_bookshelf` / `rot_words` / `rot_music` 会自动迁移到 `rot`。竖屏下页面按 240x320 重新排版（列表行、卡片、键盘、弹层都跟随当前逻辑分辨率）。
 - 运行时 PNG / JPEG 解码未启用，照片和封面优先使用预转换的 RGB565 RAW / C 数组。
 - 小智 AI 依赖网络和激活码，没有离线唤醒词。
 - 温湿度目前只有 CSV 记录，没有历史图表页。
 - 真机长跑回归仍需覆盖：内存水位、SD 热插拔、音乐 + 翻页、AI 与音频通道切换。
 - 新增功能前需要关注 app 分区余量（factory 6 MB）。
+- **改分区表后必须完整烧录一次**（`build.ps1` 默认完整烧录）；局域网 OTA 只更新 app，不会带新分区表和内置词库。
+- 16/20px 阅读字库需要手动把 `font/font_ui_*.bin` 拷到 SD 卡 `/fonts`；没拷时只有 14px。
+- Flash 内置词库只包含英汉常用词（约 12 万条）；中英词典 / 完整 15.7 万词仍从 SD 卡读。
+- CI 构建的 artifact 不含词库镜像；用 `python tools/build_flash_dict.py` 本地生成
+  `build/dict.bin`，CI 面板烧录时会自动带上。
+- 姿态广播的位移是加速度二次积分的估算值，静止时会缓慢漂移，需要按 R 归零。
 
 ---
 

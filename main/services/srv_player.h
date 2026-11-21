@@ -62,6 +62,17 @@ esp_err_t srv_player_pause(void);
 esp_err_t srv_player_resume(void);
 
 /**
+ * @brief 播放任意一个音频文件（不进媒体库/播放列表）
+ *
+ * 录音机「听录音」用它：队列里只有这一首，播完就停（不循环、不跳下一首）。
+ * 之后调 srv_player_stop() 结束；再播普通音乐走 play_playlist/play_index。
+ *
+ * @return ESP_OK 已提交播放任务；ESP_ERR_NOT_FOUND 文件不在；
+ *         ESP_ERR_NOT_SUPPORTED 扩展名不认识；ESP_ERR_INVALID_STATE SD 未挂载
+ */
+esp_err_t srv_player_play_file(const char *path);
+
+/**
  * @brief 停止播放并释放音频通道（退出后台播放时用）
  */
 esp_err_t srv_player_stop(void);

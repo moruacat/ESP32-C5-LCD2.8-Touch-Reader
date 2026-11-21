@@ -318,3 +318,80 @@ const char *srv_recorder_last_file(void)
 {
     return s_path;
 }
+
+/* ===================== 录音文件列表 ===================== */
+
+typedef struct {
+    char     path[80];
+    char     name[24];
+    uint32_t bytes;
+    int      idx;           /*!< rec-N.wav 的 N */
+} rec_file_t;
+
+static rec_file_t s_files[SRV_REC_MAX_FILES];
+static int        s_file_cnt = 0;
+static bool       s_files_scanned = false;
+
+/* 按 N 从大到小排（最新的录音在最上面） */
+static int rec_cmp_desc(const void *a, const void *b)
+{
+    const rec_file_t *fa = (const rec_file_t *)a;
+    const rec_file_t *fb = (const rec_file_t *)b;
+    return fb->idx - fa->idx;
+}
+
+int srv_recorder_scan_files(void)
+{
+    s_file_cnt = 0;
+    s_files_scanned = true;
+
+    if (!srv_sd_is_mounted()) {
+        return 0;
+    }
+
+    DIR *d = opendir(REC_DIR_PATH);
+    if (d == NULL) {
+        return 0;
+    }
+
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && s_file_cnt < SRV_REC_MAX_FILES) {
+        int n = 0;
+        if (sscanf(e->d_name, "rec-%d.wav", &n) != 1) {
+            continue;
+        }
+
+        rec_file_t *f = &s_files[s_file_cnt];
+        snprintf(f->name, sizeof(f->name), "%s", e->d_name);
+        snprintf(f->path, sizeof(f->path), REC_DIR_PATH "/%s", e->d_name);
+        f->idx = n;
+
+        struct stat st;
+        f->bytes = (stat(f->path, &st) == 0 && st.st_size > 0)
+                 ? (uint32_t)st.st_size : 0;
+        s_file_cnt++;
+    }
+    closedir(d);
+
+    qsort(s_files, (size_t)s_file_cnt, sizeof(s_files[0]), rec_cmp_desc);
+    ESP_LOGI(TAG, "录音目录里有 %d 个文件", s_file_cnt);
+    return s_file_cnt;
+}
+
+esp_err_t srv_recorder_file_info(int idx, char *path, size_t path_len,
+                                 char *name, size_t name_len, uint32_t *bytes)
+{
+    if (!s_files_scanned || idx < 0 || idx >= s_file_cnt) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (path != NULL && path_len > 0) {
+        snprintf(path, path_len, "%s", s_files[idx].path);
+    }
+    if (name != NULL && name_len > 0) {
+        snprintf(name, name_len, "%s", s_files[idx].name);
+    }
+    if (bytes != NULL) {
+        *bytes = s_files[idx].bytes;
+    }
+    return ESP_OK;
+}

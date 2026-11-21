@@ -127,6 +127,18 @@ bool app_navigator_page_can_rotate(app_page_id_t page);
 bool app_navigator_rotation_allowed(void);
 
 /**
+ * @brief 当前是否正在「旋转后原地重建页面」
+ *
+ * 旋转的实现是销毁旧屏、按新分辨率重新 build 一次当前页。页面在 build()
+ * 里查这个标志就能区分「用户重新进入本页」和「只是转了个方向」：
+ * 前者该重扫 SD / 清空搜索，后者应该沿用已有状态（扫描结果、搜索词、
+ * 已建立的网络会话等），否则转屏会像重新进页一样把状态全丢掉。
+ *
+ * 只在 build() 执行期间为 true，其余时候都是 false。
+ */
+bool app_navigator_in_page_rebuild(void);
+
+/**
  * @brief 当前页面的上一页（返回栈顶）；栈空时返回 PAGE_CLOCK
  *
  * 用于「同一个页面从不同入口进来要显示不同内容」的场景，

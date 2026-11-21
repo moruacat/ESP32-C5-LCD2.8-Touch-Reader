@@ -102,6 +102,9 @@ static uint16_t s_rot = 0;
 /*! 正在构建的页面（页面构建期间给标题栏判断要不要放旋转键用） */
 static app_page_id_t s_building = PAGE_MAX;
 
+/*! 是不是「旋转后原地重建」触发的 build（页面据此决定要不要保留状态） */
+static bool s_relayout = false;
+
 /* 这些页面自己要用横向滑动（翻页 / 操作游戏 / 涂鸦 / 拨球 / 切照片），
  * 不能再兼做「右滑返回」，否则两个动作会抢同一个手势。它们的退出都走标题栏返回键。 */
 static bool page_has_own_gesture(app_page_id_t page)
@@ -196,6 +199,11 @@ bool app_navigator_page_can_rotate(app_page_id_t page)
 bool app_navigator_rotation_allowed(void)
 {
     return page_can_rotate((s_building != PAGE_MAX) ? s_building : s_current);
+}
+
+bool app_navigator_in_page_rebuild(void)
+{
+    return s_relayout;
 }
 
 /* 创建并切换页面（调用前必须已持有 LVGL 锁）。
@@ -351,7 +359,14 @@ void app_navigator_toggle_page_rotation(void)
         s_rot = next;
         (void)srv_config_set_int(CFG_ROT, next, true);
         ESP_LOGI(TAG, "全局页面方向切到 %u° 并已保存", (unsigned)next);
+
+        /* 原地重建：页面 build() 里会查 in_page_rebuild()，据此保留扫描结果、
+         * 搜索词、AI 会话等状态。旧屏的 delete_async 在这次重建之后执行，
+         * 页面如果要在销毁回调里做「退出」动作，需要自己判断当前页是否还是自己
+         * （ui_ai.c 就是这么做的）。 */
+        s_relayout = true;
         switch_locked_ex(s_current, ANIM_NONE, true);
+        s_relayout = false;
     } else {
         ESP_LOGE(TAG, "页面旋转失败: %s", esp_err_to_name(ret));
     }

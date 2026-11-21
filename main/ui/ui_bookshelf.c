@@ -37,6 +37,9 @@ static char      s_cur_name[SRV_BOOK_NAME_MAX];
 static int       s_menu_act[UI_MENU_MAX_ITEMS];
 static uint32_t  s_menu_tick;                         /*!< 上次长按弹菜单的时刻 */
 
+/*! 列表滚动位置：旋转会原地重建整页，不记住的话转一下屏就跳回顶部 */
+static lv_coord_t s_scroll_y;
+
 /* 点卡片：打开这本书，然后进阅读器 */
 static void on_book(lv_event_t *e)
 {
@@ -362,6 +365,12 @@ static void shelf_list_del_cb(lv_event_t *e)
     s_list = NULL;
 }
 
+/* 记下滚动位置，转屏重建时恢复 */
+static void shelf_scroll_cb(lv_event_t *e)
+{
+    s_scroll_y = lv_obj_get_scroll_y(lv_event_get_target(e));
+}
+
 static void shelf_rebuild(void)
 {
     if (s_list == NULL || !lv_obj_is_valid(s_list)) {
@@ -399,6 +408,10 @@ void ui_bookshelf_create(lv_obj_t *root)
     const lv_coord_t sw = ui_scr_w();
     const lv_coord_t sh = ui_scr_h();
 
+    /* 旋转后原地重建：数据还是那一份，不要重扫 SD（几百毫秒到几秒的慢活），
+     * 也不要丢掉滚动位置 —— 否则转个屏看起来像重新进了一次书架。 */
+    const bool relayout = app_navigator_in_page_rebuild();
+
     /* 横屏双列，竖屏单列。卡片宽度跟着可用宽度算，避免竖屏只显示半张卡。 */
     s_cols = (sw < sh) ? 1 : 2;
     s_card_w = (sw - MARGIN * 2 - (s_cols - 1) * CARD_GAP) / s_cols;
@@ -409,8 +422,11 @@ void ui_bookshelf_create(lv_obj_t *root)
     /* 在线书库：返回键右侧，与搜索键同样式（搜索键在右端靠旋转键） */
     ui_titlebar_left_button_create(bar, "在线", 32, 40, on_online_clicked, NULL);
 
-    /* 每次进书架都重扫：最近阅读排序开关可能刚改过 */
-    (void)srv_library_scan();
+    if (!relayout) {
+        /* 真正进书架时才重扫：最近阅读排序开关可能刚改过 */
+        (void)srv_library_scan();
+        s_scroll_y = 0;
+    }
 
     /* 列表容器：书架比一屏长，要能纵向滚 */
     lv_obj_t *list = lv_obj_create(root);
@@ -431,6 +447,12 @@ void ui_bookshelf_create(lv_obj_t *root)
 
     s_list = list;
     lv_obj_add_event_cb(list, shelf_list_del_cb, LV_EVENT_DELETE, NULL);
+    lv_obj_add_event_cb(list, shelf_scroll_cb, LV_EVENT_SCROLL, NULL);
 
     shelf_fill(list);
+
+    if (relayout && s_scroll_y > 0) {
+        lv_obj_update_layout(list);
+        lv_obj_scroll_to_y(list, s_scroll_y, LV_ANIM_OFF);
+    }
 }

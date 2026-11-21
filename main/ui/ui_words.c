@@ -62,6 +62,7 @@ static lv_obj_t *s_rel;          /*!< 详情底部的「相关短语」容器（
 static char      s_rel_skip[WORD_LEN];        /*!< 当前词，列短语时排除自身 */
 
 static int  s_mode = 0;          /*!< 0=查词 1=译 */
+static int  s_view = 0;          /*!< 当前视图（VIEW_LIST/VIEW_DETAIL/VIEW_TRANS），转屏重建时用来恢复 */
 static char s_word[WORD_LEN];    /*!< 当前查询词 */
 static char s_sent[SENT_LEN];    /*!< 当前直译的句子 */
 static char s_detail_word_txt[WORD_LEN];  /*!< 详情里当前显示的词（返回时用） */
@@ -126,6 +127,8 @@ enum { VIEW_LIST = 0, VIEW_DETAIL, VIEW_TRANS };
 
 static void view_show(int view)
 {
+    s_view = view;
+
     lv_obj_add_flag(s_list, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_trans, LV_OBJ_FLAG_HIDDEN);
@@ -787,10 +790,10 @@ static void on_text_done(const char *text, void *arg)
     lv_obj_set_style_text_color(s_search_lb, UI_COLOR_TEXT, 0);
     s_detail_from_trans = false;
 
-    /* 词库不可用：分清是没插卡还是没词库文件，别让用户以为是"没收录" */
+    /* 词库不可用：分清是没插卡还是词库文件缺失，别让用户以为是"没收录" */
     if (srv_dict_init() != ESP_OK) {
         if (!srv_sd_is_mounted()) {
-            list_hint("SD 卡未挂载");
+            list_hint("词库不可用：SD 卡未挂载，且 Flash 里没有内置词库");
         } else {
             list_hint("词库不可用：SD 卡的 /dict 下要有 dict.dat 与 dict.idx\n"
                       "（用 tools/build_dict.py 生成）");
@@ -856,11 +859,18 @@ static void on_entry_clicked(lv_event_t *e)
 
 void ui_words_create(lv_obj_t *root)
 {
-    s_mode = 0;
-    s_word[0] = '\0';
-    s_sent[0] = '\0';
-    s_lemma_txt[0] = '\0';
-    s_detail_from_trans = false;
+    /* 转屏重建时保留搜索词、模式和视图；真正进页时才清空。
+     * 否则转一下屏，搜索结果/详情/直译全被清掉，看起来像被重置了。 */
+    const bool relayout = app_navigator_in_page_rebuild();
+    if (!relayout) {
+        s_mode = 0;
+        s_view = VIEW_LIST;
+        s_word[0] = '\0';
+        s_sent[0] = '\0';
+        s_lemma_txt[0] = '\0';
+        s_detail_word_txt[0] = '\0';
+        s_detail_from_trans = false;
+    }
 
     /* 右侧留给两个模式按钮；旋转键放到返回键右侧，避免挤占居中的标题。 */
     ui_titlebar_create_plain_rot_left(root, "单词", app_navigator_back_cb, NULL);
@@ -1046,12 +1056,44 @@ void ui_words_create(lv_obj_t *root)
      * 没就绪就顺手报一句缺什么 */
     apply_tab_style();
     set_placeholder();
-    if (srv_dict_init() == ESP_OK) {
+
+    if (relayout) {
+        /* 恢复转屏前的内容。详情视图不能只把控件重建出来 —— 释义内容是查词时
+         * 现填的，得按当时显示的词重新查一遍（查询有缓存，几毫秒）。 */
+        if (s_word[0] != '\0') {
+            lv_label_set_text(s_search_lb, s_word);
+            lv_obj_set_style_text_color(s_search_lb, UI_COLOR_TEXT, 0);
+        } else if (s_sent[0] != '\0' && s_mode == 1) {
+            lv_label_set_text(s_search_lb, s_sent);
+            lv_obj_set_style_text_color(s_search_lb, UI_COLOR_TEXT, 0);
+        }
+
+        if (s_mode == 1) {
+            if (s_sent[0] != '\0') {
+                fill_translate(s_sent);
+                view_show(VIEW_TRANS);
+            } else {
+                trans_hint();
+                view_show(VIEW_TRANS);
+            }
+        } else if (s_view == VIEW_DETAIL && s_detail_word_txt[0] != '\0' &&
+                   try_detail(s_detail_word_txt)) {
+            /* try_detail 内部已经切到详情视图 */
+        } else if (s_word[0] != '\0') {
+            show_word_results();
+            view_show(VIEW_LIST);
+        } else {
+            list_hint("点上方搜索框输入单词");
+            view_show(VIEW_LIST);
+        }
+    } else if (srv_dict_init() == ESP_OK) {
         list_hint("点上方搜索框输入单词");
+        view_show(VIEW_LIST);
     } else if (!srv_sd_is_mounted()) {
-        list_hint("SD 卡未挂载");
+        list_hint("词库不可用：SD 卡未挂载，且 Flash 里没有内置词库");
+        view_show(VIEW_LIST);
     } else {
         list_hint("词库不可用：SD 卡的 /dict 下要有 dict.dat 与 dict.idx");
+        view_show(VIEW_LIST);
     }
-    view_show(VIEW_LIST);
 }
