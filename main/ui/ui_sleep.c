@@ -47,9 +47,9 @@ bool ui_sleep_is_on(void)
  */
 #define FADE_STEPS      45
 #define FADE_DIM_MS     260
-/* 熄屏/亮屏都要在 0.5 秒内完成：45 步 × 10ms = 450ms / 8ms = 360ms */
-#define FADE_SLEEP_MS   450
-#define FADE_WAKE_MS    400
+/* 熄屏/亮屏都要求 0.25 秒内完成：45 步 × 5ms = 225ms */
+#define FADE_SLEEP_MS   250
+#define FADE_WAKE_MS    250
 
 static lv_timer_t *s_fade_timer = NULL;
 static int s_fade_from = 0;
