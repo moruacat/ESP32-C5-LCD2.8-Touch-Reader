@@ -25,6 +25,9 @@ words/*/*
 # CI 面板烧录时会自动带上 build/dict.bin（如果存在）
 flash_assets/
 
+# 待拷贝到 SD 卡的素材（字体等），不入库
+sd_upload/
+
 # ===== 阅读器多档字号字库（生成物）=====
 # tools/gen_read_fonts.py 生成，拷到 SD 卡 /fonts 使用
 font/font_ui_16.bin

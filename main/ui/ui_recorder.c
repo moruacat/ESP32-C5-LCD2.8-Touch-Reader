@@ -166,12 +166,9 @@ static void rec_update(void)
     if (playing_record()) {
         fmt_time(buf, sizeof(buf), srv_player_position_ms());
         lv_label_set_text(s_time_lb, buf);
-
-        const srv_music_t *m = srv_player_current();
-        char note[64];
-        snprintf(note, sizeof(note), "正在播放 %s（再点一下停止）",
-                 (m != NULL) ? m->name : "录音");
-        lv_label_set_text(s_state_lb, note);
+        /* 文件名在列表里已经高亮了，这里用固定文案，别把 128 字节的
+         * m->name 塞进 64 字节缓冲（CI 的 -Werror=format-truncation 会拦） */
+        lv_label_set_text(s_state_lb, "正在播放录音（再点一下停止）");
     } else if (recording) {
         fmt_time(buf, sizeof(buf), srv_recorder_elapsed_ms());
         lv_label_set_text(s_time_lb, buf);
@@ -221,7 +218,7 @@ static void on_btn(lv_event_t *e)
         const char *path = srv_recorder_last_file();
         const char *name = strrchr(path, '/');
         char buf[80];
-        snprintf(buf, sizeof(buf), "已保存 /record/%s", name ? name + 1 : path);
+        snprintf(buf, sizeof(buf), "已保存 /record/%.60s", name ? name + 1 : path);
         lv_label_set_text(s_state_lb, buf);
 
         list_rebuild();

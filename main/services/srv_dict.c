@@ -276,11 +276,20 @@ static bool parse_entry(char *line, srv_dict_entry_t *e)
 static void key_of(const char *word, char out[ANCHOR_KEY_BYTES])
 {
     memset(out, 0, ANCHOR_KEY_BYTES);
-    size_t n = strlen(word);
-    if (n > ANCHOR_KEY_BYTES) {
-        n = ANCHOR_KEY_BYTES;
+
+    /* 词库里的词统一下写成小写（build_dict.py 保证），而用户从词书/键盘
+     * 输入的可能是 Apple / China 这种大写开头。find_word 用 strncasecmp
+     * 比较是大小写不敏感的，但锚点二分用 memcmp 是敏感的：不在这里折叠
+     * 大小写的话，大写输入会定位到「a 段之前」，顺序读 128 行扫不到，
+     * 出现「联想列表里看得到、点开却打不开」。只折叠 ASCII，中文/UTF-8
+     * 字节保持原样（锚点 key 也是按原字节生成的）。 */
+    for (size_t i = 0; i < ANCHOR_KEY_BYTES && word[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)word[i];
+        if (c >= 'A' && c <= 'Z') {
+            c = (unsigned char)(c + ('a' - 'A'));
+        }
+        out[i] = (char)c;
     }
-    memcpy(out, word, n);
 }
 
 /**

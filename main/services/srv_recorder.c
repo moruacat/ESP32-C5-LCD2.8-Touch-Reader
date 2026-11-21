@@ -363,7 +363,9 @@ int srv_recorder_scan_files(void)
 
         rec_file_t *f = &s_files[s_file_cnt];
         snprintf(f->name, sizeof(f->name), "%s", e->d_name);
-        snprintf(f->path, sizeof(f->path), REC_DIR_PATH "/%s", e->d_name);
+        /* 文件名最长 rec-<int>.wav，这里限长是为了不让 GCC 把 dirent 的
+         * 256 字节 d_name 推断成可能溢出 80 字节的 path（-Werror=format-truncation） */
+        snprintf(f->path, sizeof(f->path), REC_DIR_PATH "/%.60s", e->d_name);
         f->idx = n;
 
         struct stat st;
