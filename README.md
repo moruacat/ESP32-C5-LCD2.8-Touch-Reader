@@ -17,7 +17,7 @@
 
 ### 时钟与系统
 
-- 默认时钟伪装界面，支持时间、日期、温湿度、网络 / SD / NTP / 电量状态。
+- 默认时钟伪装界面，支持时间、日期、农历、温湿度、网络 / SD / NTP / 电量状态。
 - 主菜单卡片式布局，进入后才显示阅读和其他功能入口。
 - 自动降低亮度、自动锁屏、触摸唤醒、BOOT 键休眠 / 唤醒。
 - 安全模式、隐藏菜单、快速返回主页、SD 卡热插拔。
@@ -76,7 +76,7 @@
 ### 姿态广播（电脑端 3D）
 
 - 在「设置 → 关于 → 姿态广播」打开后，设备通过 UDP 4210 端口约 30Hz 广播四元数、加速度和角速度。
-- 电脑端运行 `tools/motion3d/motion_view.py`（PyQt5 + numpy），实时显示外壳模型跟随设备旋转，并按加速度积分显示位移。
+- 电脑端运行 `tools/motion3d/motion_view.py`（PyQt5 + numpy），实时显示外壳模型跟随设备旋转（只做姿态，不做加速度积分的位移）。
 - 默认是简化外壳；用 `tools/motion3d/convert_step.py` 可以把 STEP 外壳转成 `model.obj` 后自动加载（面数上限 2 万，超了会拒绝，避免软件渲染卡死）。
 - 详见 [`tools/motion3d/README.md`](tools/motion3d/README.md)。
 
@@ -286,6 +286,7 @@ SD/
 | `tools/dict_probe.py` | PC 端复刻设备查词算法 |
 | `tools/gen_font.py` | 根据汉字表重新生成内置 14px 字体 |
 | `tools/gen_read_fonts.py` | 生成 16/18/20/22px 字库并打包 `build/font.bin` |
+| `tools/gen_lunar_table.py` | 重新生成农历数据表（1900–2099） |
 | `tools/png2lvgl.py` | PNG 图标转换为 LVGL C 数组 |
 | `tools/motion3d/` | 电脑端姿态 3D 显示（UDP + PyQt5）与 STEP→OBJ 转换 |
 
@@ -382,7 +383,7 @@ sim/                        # PC 模拟器（本地，不纳入 Git）
 - 词库只从 SD 卡 `/dict` 读取；没插 SD 时查词不可用。
 - CI 构建的 artifact 不含字库镜像；用 `python tools/gen_read_fonts.py` 本地生成
   `build/font.bin`，CI 面板烧录时会自动带上。
-- 姿态广播的位移是加速度二次积分的估算值，静止时会缓慢漂移，需要按 R 归零。
+- 姿态广播只驱动模型旋转；加速度积分位移漂移太大，已去掉。
 
 ---
 

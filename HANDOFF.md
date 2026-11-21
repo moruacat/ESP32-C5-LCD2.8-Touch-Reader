@@ -557,6 +557,7 @@ python tools\gen_dict.py
 | 版本 1.5.4 | 根 CMakeLists `PROJECT_VER` | `CMakeLists.txt` |
 | 词书里大写单词「列表有、点开打不开」 | `key_of()` 锚点 key 没折叠大小写：`find_word/prefix` 用 `strncasecmp` 但锚点二分用 `memcmp`，`Apple` 会定位到 a 段之前，128 行扫不到。现在 key 统一折叠 ASCII 大小写 | `srv_dict.c` |
 | 开机崩溃 `tcpip_send_msg_wait_sem: Invalid mbox` | `motion_net` 开着时姿态广播任务在 `srv_wifi_init()` 之前就 `socket()`，lwIP mbox 还没建。改为等 `srv_wifi_is_connected()` 为真再建 socket，断线关闭重等 | `srv_motion.c` |
+| 时钟页显示农历 | 新增 `srv_lunar`（1900–2099 查表 + 干支/月日格式化），日期行拼成「2026-11-21 星期六 农历丙午年十月十三」 | `srv_lunar.[ch]`、`lunar_table.inc`、`ui_clock.c`、`tools/gen_lunar_table.py` |
 | 陀螺仪 → 电脑虚拟场景 | 固件新增姿态融合与 UDP 4210 广播（30Hz 文本行），设置→关于加开关；电脑端 `tools/motion3d` PyQt5 实时 3D + 位置积分；STEP→OBJ 可选 | `srv_motion.[ch]`、`ui_set_about.c`、`app_init.c`、`tools/motion3d/` |
 
 ### 13.2 分区表（已改，必须完整重烧）
@@ -603,7 +604,7 @@ MOTION <seq> <t_ms> <qw> <qx> <qy> <qz> <ax> <ay> <az> <gx> <gy> <gz>
 - 融合：四元数陀螺积分 + 加速度计互补修正（`KP_ACCEL 0.8`），静止 3 秒后重新用重力初始化。
 - 轴就是 QMI8658 芯片轴，没有做屏幕方向翻转；电脑端按 X/Y/Z 调 90° + G 归零对齐。
 - WiFi 未连接时任务 1 秒轮询等待；关闭开关后任务退出。
-- PC 端位移：`v *= exp(-dt/0.9)` 阻尼 + 限幅 ±0.35m；静止漂移是积分固有现象。
+- PC 端只显示姿态，不做位移：加速度二次积分漂移太严重，已去掉位移积分与「重置位置」。
 
 ### 13.6 下一步（验证顺序）
 

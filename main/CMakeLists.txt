@@ -52,6 +52,7 @@ idf_component_register(
         "ui/ui_game_soccer.c"
         "services/srv_input.c"
         "services/srv_rtc.c"
+        "services/srv_lunar.c"
         "services/srv_sd.c"
         "services/srv_fs.c"
         "services/srv_config.c"

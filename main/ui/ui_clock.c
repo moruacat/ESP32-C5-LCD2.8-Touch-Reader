@@ -10,6 +10,7 @@
 #include "srv_player.h"
 #include "srv_audio.h"
 #include "srv_safe.h"
+#include "srv_lunar.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -311,7 +312,7 @@ static void clock_refresh_timer(lv_timer_t *timer)
 {
     (void)timer;
     srv_rtc_time_t t;
-    char buf[48];
+    char buf[96];
 
     if (srv_rtc_get_time(&t) != ESP_OK) {
         return;
@@ -324,9 +325,15 @@ static void clock_refresh_timer(lv_timer_t *timer)
     snprintf(buf, sizeof(buf), "%02d", t.sec);
     lv_label_set_text(s_sec_label, buf);
 
-    /* 日期 + 星期 */
-    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %s",
-             t.year, t.month, t.day, WEEK_CN[(t.dotw + 7) % 7]);
+    /* 日期 + 星期 + 农历（农历算不出来时只显示公历） */
+    int dn = snprintf(buf, sizeof(buf), "%04d-%02d-%02d %s",
+                      t.year, t.month, t.day, WEEK_CN[(t.dotw + 7) % 7]);
+    char lunar[40];
+    if (dn > 0 && (size_t)dn < sizeof(buf) &&
+        srv_lunar_format_solar(t.year, t.month, t.day, lunar, sizeof(lunar)) == ESP_OK &&
+        lunar[0] != '\0') {
+        snprintf(buf + dn, sizeof(buf) - (size_t)dn, " 农历%s", lunar);
+    }
     lv_label_set_text(s_date_label, buf);
 
     /* 状态栏：SD 卡有卡才显示图标 */

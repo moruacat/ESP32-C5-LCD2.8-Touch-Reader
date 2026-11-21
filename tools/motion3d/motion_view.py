@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""电脑端实时 3D 姿态/位移显示（配合固件「设置 → 关于 → 姿态广播」）。
+"""电脑端实时 3D 姿态显示（配合固件「设置 → 关于 → 姿态广播」）。
 
 数据来自设备通过 UDP 4210 端口广播的文本行：
 
@@ -9,9 +9,9 @@
     四元数 ×10000，加速度 ×1000（单位 g），角速度 ×100（单位 °/s）
 
 界面：
-  - 3D 视图：简化外壳模型（外壳 + 屏幕 + 磁吸底座），跟随设备旋转；
-    加速度二次积分出位移，带阻尼，避免静止噪声越漂越远。
-  - 键盘/按钮：R 重置位置，G 姿态归零，X/Y/Z 让模型绕对应轴转 90°（对齐焊接方向）。
+  - 3D 视图：简化外壳模型（外壳 + 屏幕 + 磁吸底座），只跟随设备旋转。
+    加速度积分的位移漂移太大，已去掉（协议字段保留，PC 端不使用）。
+  - 键盘/按钮：G 姿态归零，X/Y/Z 让模型绕对应轴转 90°（对齐焊接方向）。
   - 可选：同目录放 model.obj（例如 convert_step.py 转出来的外壳），会用真实
     模型替代简化外壳。面数太多时会自动拒绝，避免软件渲染卡死。
 
@@ -251,15 +251,7 @@ class SceneView(QWidget):
         self.verts, self.faces, self.colors = model
         self.q = (1.0, 0.0, 0.0, 0.0)   # 设备姿态
         self.q_offset = (1.0, 0.0, 0.0, 0.0)  # 手工对齐偏移
-        self.pos = np.zeros(3)          # 位移（米）
-        self.vel = np.zeros(3)
-        self.last_sample_t = None
         self.show_grid = True
-
-    def reset_position(self):
-        self.pos[:] = 0.0
-        self.vel[:] = 0.0
-        self.last_sample_t = None
 
     def zero_attitude(self):
         """把当前姿态记成「正」：叠加它的共轭，使显示姿态回到之前的轴对齐偏移。
@@ -276,27 +268,8 @@ class SceneView(QWidget):
     def update_sample(self, sample):
         if sample is None:
             return
-        q = sample["q"]
-        self.q = q
-
-        # 位移：世界加速度 = R * a_body - 重力，阻尼积分
-        now = sample["t_ms"] / 1000.0
-        if self.last_sample_t is None:
-            self.last_sample_t = now
-            return
-        dt = now - self.last_sample_t
-        self.last_sample_t = now
-        if dt <= 0 or dt > 0.2:
-            return
-
-        r = quat_to_matrix(quat_mul(self.q_offset, self.q))
-        a_world = r @ np.array(sample["a"]) - np.array([0.0, 0.0, 1.0])
-        self.vel = self.vel * math.exp(-dt / 0.9) + a_world * 9.807 * dt
-        self.pos = self.pos + self.vel * dt
-        # 限幅，免得漂到窗外
-        for i in range(3):
-            self.pos[i] = max(-0.35, min(0.35, self.pos[i]))
-            self.vel[i] = max(-2.0, min(2.0, self.vel[i]))
+        # 只跟姿态；加速度积分出来的位移漂移太大，已经去掉。
+        self.q = sample["q"]
 
     # -------- 投影 --------
     def _project(self, pts):
@@ -337,7 +310,7 @@ class SceneView(QWidget):
             self._draw_grid(painter)
 
         r = quat_to_matrix(quat_mul(self.q_offset, self.q))
-        world = self.verts @ r.T + self.pos
+        world = self.verts @ r.T
         px, py, pz = self._project(world)
 
         # 画家算法：远的面先画
@@ -445,7 +418,6 @@ class MainWindow(QMainWindow):
             b.clicked.connect(fn)
             side.addWidget(b)
 
-        add_btn("重置位置 (R)", self.view.reset_position)
         add_btn("姿态归零 (G)", self.view.zero_attitude)
         add_btn("模型绕 X +90°", lambda: self.view.rotate_offset((1, 0, 0), 90))
         add_btn("模型绕 Y +90°", lambda: self.view.rotate_offset((0, 1, 0), 90))
@@ -470,13 +442,11 @@ class MainWindow(QMainWindow):
                 "● 在线   累计 %d 包，丢 %d\n"
                 "四元数  w=%.3f x=%.3f y=%.3f z=%.3f\n"
                 "加速度  %.2f  %.2f  %.2f g\n"
-                "角速度  %.1f  %.1f °/s\n"
-                "位置    %+.3f %+.3f %+.3f m"
+                "角速度  %.1f  %.1f °/s"
                 % (self.receiver.packets, self.receiver.lost,
                    q[0], q[1], q[2], q[3],
                    a[0], a[1], a[2],
-                   g[0], g[1],
-                   self.view.pos[0], self.view.pos[1], self.view.pos[2]))
+                   g[0], g[1]))
         elif not self.receiver.online:
             self.status.setText("○ 等待设备数据…\n"
                                 "设备上打开：设置 → 关于 → 姿态广播\n"
@@ -487,9 +457,7 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, e):
         k = e.key()
-        if k == Qt.Key_R:
-            self.view.reset_position()
-        elif k == Qt.Key_G:
+        if k == Qt.Key_G:
             self.view.zero_attitude()
         elif k == Qt.Key_X:
             self.view.rotate_offset((1, 0, 0), 90)
