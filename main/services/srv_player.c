@@ -536,11 +536,12 @@ static bool pcm_grow(track_t *t, uint32_t need)
     return true;
 }
 
-/* 已解出的 PCM 送到扬声器并累计播放位置 */
-static void track_emit(track_t *t, uint32_t bytes)
+/* 把一块 PCM 送到扬声器并累计播放位置。
+ * data 必须由调用方指明：MP3 解码在 pcm_buf，WAV 裸 PCM 直接来自 in_buf。 */
+static void track_emit(track_t *t, const void *data, uint32_t bytes)
 {
     const int64_t t0 = esp_timer_get_time();
-    srv_audio_pcm_write(t->pcm_buf, (int)bytes);
+    srv_audio_pcm_write(data, (int)bytes);
     const int64_t write_us = esp_timer_get_time() - t0;
 
     bus_stat_add(0, write_us, (int)bytes, t->sample_rate, t->channels * (t->bits / 8));
@@ -576,7 +577,8 @@ static int track_step(track_t *t)
         if (n <= 0) {
             return 0;
         }
-        track_emit(t, (uint32_t)n);
+        /* 裸 PCM 的数据就在 in_buf 里，不是 pcm_buf（pcm_buf 是解码器输出缓冲） */
+        track_emit(t, t->in_buf + t->in_used, (uint32_t)n);
         t->in_used += n;
         return 1;
     }
@@ -643,7 +645,7 @@ static int track_step(track_t *t)
             t->codec_open = true;
         }
 
-        track_emit(t, out.decoded_size);
+        track_emit(t, t->pcm_buf, out.decoded_size);
         return 1;
     }
 }
