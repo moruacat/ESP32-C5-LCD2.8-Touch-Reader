@@ -19,6 +19,7 @@ static const char *WEEK_CN[] = {"星期日", "星期一", "星期二", "星期�
 static lv_obj_t *s_time_label;
 static lv_obj_t *s_sec_label;
 static lv_obj_t *s_date_label;
+static lv_obj_t *s_lunar_label;     /*!< 公历下面那行农历；计时器运行时让位 */
 static lv_obj_t *s_temp_label;
 static lv_obj_t *s_humi_label;
 static lv_obj_t *s_timer_label;
@@ -197,7 +198,16 @@ static void timer_line_refresh(void)
 
     if (!sw_on && !cd_on) {
         lv_obj_add_flag(s_timer_label, LV_OBJ_FLAG_HIDDEN);
+        /* 计时行不占位时，把公历下面的农历露出来 */
+        if (s_lunar_label != NULL && lv_label_get_text(s_lunar_label)[0] != '\0') {
+            lv_obj_remove_flag(s_lunar_label, LV_OBJ_FLAG_HIDDEN);
+        }
         return;
+    }
+
+    /* 计时行和农历用同一个位置，有计时/倒计时时先让农历让位 */
+    if (s_lunar_label != NULL) {
+        lv_obj_add_flag(s_lunar_label, LV_OBJ_FLAG_HIDDEN);
     }
 
     char   buf[64];
@@ -325,16 +335,22 @@ static void clock_refresh_timer(lv_timer_t *timer)
     snprintf(buf, sizeof(buf), "%02d", t.sec);
     lv_label_set_text(s_sec_label, buf);
 
-    /* 日期 + 星期 + 农历（农历算不出来时只显示公历） */
-    int dn = snprintf(buf, sizeof(buf), "%04d-%02d-%02d %s",
-                      t.year, t.month, t.day, WEEK_CN[(t.dotw + 7) % 7]);
-    char lunar[40];
-    if (dn > 0 && (size_t)dn < sizeof(buf) &&
-        srv_lunar_format_solar(t.year, t.month, t.day, lunar, sizeof(lunar)) == ESP_OK &&
-        lunar[0] != '\0') {
-        snprintf(buf + dn, sizeof(buf) - (size_t)dn, " 农历%s", lunar);
-    }
+    /* 日期 + 星期 */
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %s",
+             t.year, t.month, t.day, WEEK_CN[(t.dotw + 7) % 7]);
     lv_label_set_text(s_date_label, buf);
+
+    /* 农历单独一行，放在公历下面；有计时/倒计时时由 timer_line_refresh 让位 */
+    if (s_lunar_label != NULL) {
+        char lunar[48];
+        if (srv_lunar_format_solar(t.year, t.month, t.day, lunar, sizeof(lunar)) == ESP_OK &&
+            lunar[0] != '\0') {
+            snprintf(buf, sizeof(buf), "农历%s", lunar);
+            lv_label_set_text(s_lunar_label, buf);
+        } else {
+            lv_label_set_text(s_lunar_label, "");
+        }
+    }
 
     /* 状态栏：SD 卡有卡才显示图标 */
     ui_sd_icon_set(srv_sd_is_mounted());
@@ -407,6 +423,11 @@ static void clock_root_del_cb(lv_event_t *e)
     s_pctl_stopping   = false;
     s_pctl_pause_icon = false;
 
+    /* 注意：s_lunar_label / s_timer_label 不在这里置 NULL。
+     * 旧页面是 delete_async，手快「时钟→菜单→时钟」时新页可能已经建好，
+     * 这里清空会把新页面的指针一起清掉；旧定时器在上一行已经删了，
+     * 残留指针不会被访问，新页面 create 会覆盖。 */
+
     /* 网络指示器同样跟着页面一起销毁 */
     s_wifi_box = NULL;
     memset(s_wifi_bars, 0, sizeof(s_wifi_bars));
@@ -458,12 +479,19 @@ void ui_clock_create(lv_obj_t *root)
     lv_label_set_text(s_date_label, "----");
     lv_obj_align(s_date_label, LV_ALIGN_CENTER, 0, 26);
 
-    /* ===== 计时器 / 倒计时（运行时才显示） ===== */
+    /* ===== 农历（公历下面单独一行） ===== */
+    s_lunar_label = lv_label_create(root);
+    lv_obj_set_style_text_color(s_lunar_label, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(s_lunar_label, &font_ui_14, 0);
+    lv_label_set_text(s_lunar_label, "");
+    lv_obj_align(s_lunar_label, LV_ALIGN_CENTER, 0, 46);
+
+    /* ===== 计时器 / 倒计时（运行时才显示，与农历同一行、互斥） ===== */
     s_timer_label = lv_label_create(root);
     lv_obj_set_style_text_color(s_timer_label, UI_COLOR_WARN, 0);
     lv_obj_set_style_text_font(s_timer_label, &font_ui_14, 0);
     lv_label_set_text(s_timer_label, "");
-    lv_obj_align(s_timer_label, LV_ALIGN_CENTER, 0, 48);
+    lv_obj_align(s_timer_label, LV_ALIGN_CENTER, 0, 46);
     lv_obj_add_flag(s_timer_label, LV_OBJ_FLAG_HIDDEN);
     timer_line_refresh();
 
