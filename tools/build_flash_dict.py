@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""生成放进 Flash 分区的离线词库（`flash_assets/dict/`）。
+"""从完整词库裁一份「常用词」精简词库（SD 卡备份 / 小卡用）。
 
-完整词库 dict/dict.dat 有 17MB（15.7 万条），32MB Flash 扣掉 app/OTA 之后
+> 1.5.4 起词库**不再打进 Flash**：完整词库 27 万词太大，Flash 的剩余空间
+> 留给阅读字库（font 分区）。设备端词库只从 SD 卡 `/dict` 读取。
+> 这个脚本仍然有用：可以在 SD 卡空间紧张时生成一份精简词库替换 `/dict/dict.dat`。
+
+完整词库 dict/dict.dat 有 17MB（27 万行），32MB Flash 扣掉 app/OTA 之后
 放不下；而 SD 卡又不是一直都在。所以这里从现有主表里裁一份「常用词」：
 
   1. 有考试/牛津/Collins 标签的词（构建脚本认为「常用」的那批）
@@ -187,7 +191,7 @@ def main():
     if not args.no_image:
         ok = make_image(args.image, args.partition_size)
         if ok:
-            print("CI 面板烧录时会自动检测这个镜像并按 0x1220000 写入 dict 分区。")
+            print("注意：dict 分区已从 1.5.4 的分区表移除，这个镜像是留给自定义/备份用的。")
     return 0
 
 

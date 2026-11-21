@@ -131,19 +131,19 @@ idf_component_register(
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-deprecated-declarations)
 
 # =============================================================================
-# 内置词库镜像（dict 分区，SPIFFS）
+# 多档字号字库镜像（font 分区，SPIFFS）
 #
-# 数据来自 tools/build_flash_dict.py 生成的 flash_assets/dict/（约 7.5MB，
-# 12 万常用词）。目录不存在就跳过，不影响常规 app 构建：
-# 没有内置词库时设备端自动回退到 SD 卡 /dict。
+# 数据来自 tools/gen_read_fonts.py 生成的 flash_assets/fonts/（16/18/20/22px，
+# 约 9.6MB）。目录不存在就跳过，不影响 app 构建：没有内置字库时设备端
+# 自动回退到 SD 卡 /fonts（再没有就只用内嵌的 14px）。
 #
-# 注意：改分区表后第一次必须完整烧录（idf.py flash 会把 dict.bin 一起写），
+# 改分区表后第一次必须完整烧录（idf.py flash 会把 font.bin 一起写），
 # 之后日常只烧 app 不会覆盖这个分区。
 # =============================================================================
 set(FLASH_ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../flash_assets")
-if(EXISTS "${FLASH_ASSETS_DIR}/dict/dict.dat")
-    spiffs_create_partition_image(dict "${FLASH_ASSETS_DIR}" FLASH_IN_PROJECT)
-    message(STATUS "内置词库：打包 ${FLASH_ASSETS_DIR}")
+if(EXISTS "${FLASH_ASSETS_DIR}/fonts/font_ui_16.bin")
+    spiffs_create_partition_image(font "${FLASH_ASSETS_DIR}/fonts" FLASH_IN_PROJECT)
+    message(STATUS "阅读字库：打包 ${FLASH_ASSETS_DIR}/fonts")
 else()
-    message(STATUS "内置词库目录不存在，跳过 dict 分区镜像（先跑 tools/build_flash_dict.py）")
+    message(STATUS "字库目录不存在，跳过 font 分区镜像（先跑 tools/gen_read_fonts.py）")
 endif()

@@ -5,24 +5,97 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
+#ifdef ESP_PLATFORM
+#include "esp_spiffs.h"     /* IDF 6.x：esp_vfs_spiffs.h 已并入 esp_spiffs.h */
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 
 static const char *TAG = "ui_font";
 
-/* 字号档位：14 内嵌，16/20 从 SD 卡加载。新增档位时同步生成
- * font/font_ui_<px>.bin 并拷到 SD 的 /fonts 下。 */
-static const int s_sizes[] = { 14, 16, 20 };
+/* 字号档位：14 内嵌，其余从字库加载。新增档位时同步运行
+ * tools/gen_read_fonts.py 并把 font/font_ui_<px>.bin 打进 font 分区
+ * （或拷到 SD 卡 /fonts）。 */
+static const int s_sizes[] = { 14, 16, 18, 20, 22 };
 #define SIZE_COUNT  (int)(sizeof(s_sizes) / sizeof(s_sizes[0]))
+
+/*! Flash 里的字库分区（由 main/CMakeLists.txt 打包） */
+#define FONT_FLASH_BASE     "/fontflash"
+#define FONT_FLASH_PART     "font"
 
 extern const lv_font_t font_ui_14;
 
 static lv_font_t *s_loaded = NULL;      /*!< 动态加载的字体（NULL = 只用 14px） */
 static int        s_loaded_px = 0;
 
-static void make_path(int px, char *out, size_t out_len)
+#ifdef ESP_PLATFORM
+static bool s_flash_mounted = false;
+static bool s_flash_tried = false;
+
+static bool font_flash_mount(void)
+{
+    if (s_flash_mounted) {
+        return true;
+    }
+    if (s_flash_tried) {
+        return false;
+    }
+    s_flash_tried = true;
+
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path              = FONT_FLASH_BASE,
+        .partition_label        = FONT_FLASH_PART,
+        .max_files              = 4,
+        .format_if_mount_failed = false,
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "字库分区不可用（%s），只用 SD 卡 /fonts", esp_err_to_name(ret));
+        return false;
+    }
+    s_flash_mounted = true;
+    ESP_LOGI(TAG, "字库分区已挂载到 %s", FONT_FLASH_BASE);
+    return true;
+}
+#endif
+
+static void make_sd_path(int px, char *out, size_t out_len)
 {
     snprintf(out, out_len, "%s/fonts/font_ui_%d.bin", srv_sd_mount_point(), px);
+}
+
+static void make_flash_path(int px, char *out, size_t out_len)
+{
+    snprintf(out, out_len, "%s/font_ui_%d.bin", FONT_FLASH_BASE, px);
+}
+
+/* 找一个实际存在的字库文件：SD 卡优先，其次 Flash 分区 */
+static bool find_font_path(int px, char *out, size_t out_len)
+{
+    if (px <= 14) {
+        out[0] = '\0';
+        return false;
+    }
+
+    make_sd_path(px, out, out_len);
+    FILE *fp = fopen(out, "rb");
+    if (fp != NULL) {
+        fclose(fp);
+        return true;
+    }
+
+#ifdef ESP_PLATFORM
+    if (font_flash_mount()) {
+        make_flash_path(px, out, out_len);
+        fp = fopen(out, "rb");
+        if (fp != NULL) {
+            fclose(fp);
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 bool ui_read_font_available(int px)
@@ -35,13 +108,7 @@ bool ui_read_font_available(int px)
     }
 
     char path[96];
-    make_path(px, path, sizeof(path));
-    FILE *fp = fopen(path, "rb");
-    if (fp == NULL) {
-        return false;
-    }
-    fclose(fp);
-    return true;
+    return find_font_path(px, path, sizeof(path));
 }
 
 int ui_read_font_next(int px)
@@ -84,11 +151,14 @@ lv_font_t *ui_read_font_get(int px)
     ui_read_font_release();
 
     char path[96];
-    make_path(px, path, sizeof(path));
+    if (!find_font_path(px, path, sizeof(path))) {
+        ESP_LOGW(TAG, "没有 %dpx 字库（SD /fonts 与 Flash 分区都没有），回退 14px", px);
+        return (lv_font_t *)&font_ui_14;
+    }
 
     FILE *fp = fopen(path, "rb");
     if (fp == NULL) {
-        ESP_LOGW(TAG, "没有 %dpx 字库（%s），回退 14px", px, path);
+        ESP_LOGW(TAG, "打不开 %dpx 字库（%s），回退 14px", px, path);
         return (lv_font_t *)&font_ui_14;
     }
 
@@ -144,6 +214,6 @@ lv_font_t *ui_read_font_get(int px)
 
     s_loaded = f;
     s_loaded_px = px;
-    ESP_LOGI(TAG, "加载 %dpx 阅读字体（%ld KB）", px, sz / 1024);
+    ESP_LOGI(TAG, "加载 %dpx 阅读字体（%ld KB，%s）", px, sz / 1024, path);
     return f;
 }

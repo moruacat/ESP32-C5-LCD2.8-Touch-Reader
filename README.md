@@ -30,7 +30,7 @@
 - 阅读长按菜单：封面、简介、跳转、自动翻页。
 - 自动翻页间隔可输入秒数（5~600 秒），正文顶部细线显示进度。
 - 断点续读、阅读字号 / 字距 / 行距 / 段距设置；阅读器跟随全局横竖屏方向，长按菜单里也能切换。
-- 字号支持 **14 / 16 / 20px**：14px 内嵌在固件里，16/20px 用 `tools/gen_read_fonts.py` 生成的 `.bin` 字库，放到 SD 卡 `/fonts` 即可在「设置 → 阅读 → 字号」循环切换（没有字库时自动只有 14px，不会出现假选项）。
+- 字号支持 **14 / 16 / 18 / 20 / 22px**：14px 内嵌在固件里，其余档位由 `tools/gen_read_fonts.py` 生成 `.bin` 字库，默认打进 Flash 的 `font` 分区（无 SD 也能用）；SD 卡 `/fonts` 里有同名文件时优先用 SD 的。「设置 → 阅读 → 字号」循环切换，没有字库的档位会自动跳过。
 - 段距按「格」调节（1 格 = 段间 1 个空行），所有可选值都真实生效。
 - 书架双列卡片、最近阅读排序、长按移出书架。
 - 书架竖屏（270°）自动切换为单列卡片。
@@ -43,7 +43,7 @@
 - 词级直译、相关短语、考试徽章。
 - 单词书单元学习、认识 / 不认识计分、错词本。
 - 中文词库查询支持拼音、前缀匹配。
-- **Flash 内置词库**：`tools/build_flash_dict.py` 从完整词库裁出约 12 万常用词（7.5MB）打进 `dict` 分区，没插 SD 卡也能查词；SD 卡上有完整词库时优先用 SD 的。分区镜像在构建时由 `spiffs_create_partition_image()` 生成。
+- 词库只放 SD 卡：完整离线英汉词典约 27 万条（`/dict`），Flash 空间留给阅读字库。
 - 单词页跟随全局横竖屏方向（单词主页、变形查询和学习页共用），竖屏下输入键盘贴底显示。
 
 > 当前未集成拼音输入法。界面输入以英文 / ASCII 为主，中文词库仍可通过拼音查询。
@@ -124,7 +124,7 @@
 factory  6 MB
 ota_0    6 MB
 ota_1    6 MB
-dict     9 MB SPIFFS（内置词库，构建时生成）
+font     11 MB SPIFFS（16/18/20/22px 阅读字库，构建时生成）
 ```
 
 > 设置不再存 SD 卡：整份配置打包写进 Flash 的 `nvs` 分区（带 magic / 版本 / 长度 / CRC32 校验），
@@ -134,7 +134,7 @@ dict     9 MB SPIFFS（内置词库，构建时生成）
 
 ```text
 build/clock_reader.bin
-build/dict.bin          # flash_assets 存在时才生成
+build/font.bin          # flash_assets/fonts 存在时才生成
 ```
 
 ---
@@ -164,7 +164,7 @@ build/dict.bin          # flash_assets 存在时才生成
 
 > 脚本会导入 ESP-IDF 环境，并使用 `idf.py --no-ccache`。沙箱 / 杀毒软件环境下 ccache 可能卡死，不建议省略 `--no-ccache`。
 >
-> **1.5.4 改了分区表**（`fonts`/`storage` 合并成 9MB 的 `dict`），第一次必须完整烧录一次；
+> **1.5.4 改了分区表**（新增 11MB 的 `font` 字库分区），第一次必须完整烧录一次；
 > 之后只烧 app（`-AppOnly`）即可。OTA 也不会更新分区表。
 
 ### 方式二：手动 IDF 命令
@@ -188,15 +188,16 @@ idf.py --no-ccache -p COM20 app-flash monitor
 （`idf.py reconfigure` + `idf.py build`）。改完代码推送后看 Actions 结果即可，不需要本地
 装 IDF 也能验证编译。
 
-CI 构建没有 `flash_assets/`，artifact 里不含内置词库镜像。词库在本地一键生成：
+CI 构建没有 `flash_assets/`，artifact 里不含阅读字库镜像。字库在本地一键生成：
 
 ```powershell
-python tools/build_flash_dict.py
+python tools/gen_read_fonts.py
 ```
 
-它会生成 `flash_assets/dict/` 与 `build/dict.bin`（9MB SPIFFS 镜像）。用
-`tools/ci_panel` 烧录 CI 固件时，面板会自动检测并追加 `build/dict.bin` 到
-`0x1220000`；没有这个文件时只烧固件，查词回退 SD 卡。
+它会生成 `font/font_ui_{16,18,20,22}.bin`、`flash_assets/fonts/` 与
+`build/font.bin`（11MB SPIFFS 镜像）。用 `tools/ci_panel` 烧录 CI 固件时，面板会自动
+检测并追加 `build/font.bin` 到 `0x1220000`；没有这个文件时只烧固件，字号回退 SD
+`/fonts` 或内嵌的 14px。词库仍然只放 SD 卡，不参与烧录。
 
 ---
 
@@ -247,15 +248,17 @@ SD/
 ├── config.dat              # 旧版设置（只在本版第一次启动时导入 NVS，之后不再写）
 ├── wifi.dat                # WiFi 历史，自动生成
 ├── books/                  # TXT / EBF 电子书
-├── dict/                   # 完整离线词典（优先于 Flash 内置词库）
+├── dict/                   # 完整离线词典（查词唯一来源）
 │   ├── dict.dat
 │   ├── dict.idx
 │   ├── variants.dat
 │   ├── variants.idx
 │   └── ...
-├── fonts/                  # 阅读器多档字号字库
+├── fonts/                  # 阅读字库（可选；有则优先于 Flash 的 font 分区）
 │   ├── font_ui_16.bin
-│   └── font_ui_20.bin
+│   ├── font_ui_18.bin
+│   ├── font_ui_20.bin
+│   └── font_ui_22.bin
 ├── music/                  # MP3 / WAV 音乐
 ├── words/                  # 单词书单元
 ├── photos/                 # RGB565 .raw 照片
@@ -275,14 +278,14 @@ SD/
 | `tools/epub2ebf/` | EPUB 转换命令行 / GUI |
 | `tools/photo2raw/` | 图片转 RGB565 RAW |
 | `tools/build_dict.py` | 构建离线英汉词典 |
-| `tools/build_flash_dict.py` | 从完整词库裁出 Flash 内置常用词库，并一键生成 `build/dict.bin` |
+| `tools/build_flash_dict.py` | 可选：从完整词库裁一份精简词库（备份/小卡用，不再打进 Flash） |
 | `tools/build_zh_dict.py` | 构建中英双向词典 |
 | `tools/build_variants.py` | 构建词形 / 变形数据 |
 | `tools/build_wordbook.py` | 生成单词书数据 |
 | `tools/check_dict.py` | 检查词典格式、排序与索引 |
 | `tools/dict_probe.py` | PC 端复刻设备查词算法 |
 | `tools/gen_font.py` | 根据汉字表重新生成内置 14px 字体 |
-| `tools/gen_read_fonts.py` | 生成阅读器 16/20px 的 `.bin` 字库 |
+| `tools/gen_read_fonts.py` | 生成 16/18/20/22px 字库并打包 `build/font.bin` |
 | `tools/png2lvgl.py` | PNG 图标转换为 LVGL C 数组 |
 | `tools/motion3d/` | 电脑端姿态 3D 显示（UDP + PyQt5）与 STEP→OBJ 转换 |
 
@@ -374,11 +377,11 @@ sim/                        # PC 模拟器（本地，不纳入 Git）
 - 温湿度目前只有 CSV 记录，没有历史图表页。
 - 真机长跑回归仍需覆盖：内存水位、SD 热插拔、音乐 + 翻页、AI 与音频通道切换。
 - 新增功能前需要关注 app 分区余量（factory 6 MB）。
-- **改分区表后必须完整烧录一次**（`build.ps1` 默认完整烧录）；局域网 OTA 只更新 app，不会带新分区表和内置词库。
-- 16/20px 阅读字库需要手动把 `font/font_ui_*.bin` 拷到 SD 卡 `/fonts`；没拷时只有 14px。
-- Flash 内置词库只包含英汉常用词（约 12 万条）；中英词典 / 完整 15.7 万词仍从 SD 卡读。
-- CI 构建的 artifact 不含词库镜像；用 `python tools/build_flash_dict.py` 本地生成
-  `build/dict.bin`，CI 面板烧录时会自动带上。
+- **改分区表后必须完整烧录一次**（CI 面板烧分区表 + `build/font.bin`；`build.ps1` 同样会带）；局域网 OTA 只更新 app，不会带新分区表和字库。
+- 16/18/20/22px 字库默认在 Flash 的 `font` 分区；SD 卡 `/fonts` 里有同名文件时优先用 SD。两者都没有时只有 14px。
+- 词库只从 SD 卡 `/dict` 读取；没插 SD 时查词不可用。
+- CI 构建的 artifact 不含字库镜像；用 `python tools/gen_read_fonts.py` 本地生成
+  `build/font.bin`，CI 面板烧录时会自动带上。
 - 姿态广播的位移是加速度二次积分的估算值，静止时会缓慢漂移，需要按 R 归零。
 
 ---

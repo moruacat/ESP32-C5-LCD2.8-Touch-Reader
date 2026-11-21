@@ -13,8 +13,8 @@ factory,  app,  factory, 0x20000,  0x600000,
 # 注意：改分区表后必须完整重烧一次。
 ota_0,    app,  ota_0,   0x620000, 0x600000,
 ota_1,    app,  ota_1,   0xC20000, 0x600000,
-# 内置词库（SPIFFS）：构建时由 main/CMakeLists.txt 的
-# spiffs_create_partition_image(dict flash_assets/) 生成并随 flash 一起烧录。
-# 内容来自 tools/build_flash_dict.py（约 12 万常用词，7.5MB）。
-# SD 卡上有完整词库时优先用 SD 的，这张分区只是「没插卡也能查词」的兜底。
-dict,     data, spiffs,  0x1220000,0x900000,
+# 阅读器多档字号字库（SPIFFS）：构建时由 main/CMakeLists.txt 的
+# spiffs_create_partition_image(font flash_assets/fonts/) 生成并随 flash 一起烧录。
+# 内容来自 tools/gen_read_fonts.py（16/18/20/22px，约 9.6MB）。
+# SD 卡 /fonts 里有同名文件时优先用 SD 的；词库仍然只放 SD 卡。
+font,     data, spiffs,  0x1220000,0xB00000,

@@ -551,8 +551,8 @@ python tools\gen_dict.py
 | 录音机不能回放、播放器不能放 WAV | WAV 改走裸 PCM 直通（simple_dec 的 WAV 解码器要求 RIFF 头，而播放器从 data 块喂，必失败）；新增 `srv_player_play_file()`；录音机页加 `/record` 列表与试听 | `srv_player.[ch]`、`srv_recorder.[ch]`、`ui/ui_recorder.c` |
 | 段距非整十不生效 | 设置页段距改成 10 一档（按「格」显示），阅读器仍按 10 折算空行 | `ui/ui_set_read.c`、`ui/ui_reader.c` |
 | 去掉 SD 弹出提示里的书架警告 | 关于页确认框文案改为「弹出后 SD 卡将无法读写」 | `ui/ui_set_about.c` |
-| 多加字体大小 | 阅读器 14/16/20px：14 内嵌，16/20 用 `tools/gen_read_fonts.py` 生成 `.bin` 放 SD `/fonts`，`ui_font` 按需加载/释放 | `ui/ui_font.[ch]`、`ui_set_read.c`、`ui_reader.c`、`tools/gen_read_fonts.py` |
-| 单词放进 Flash | 新增 `dict` SPIFFS 分区（9MB）+ `tools/build_flash_dict.py` 裁出约 12 万常用词（7.5MB），SD 完整词库优先 | `partitions.csv`、`main/CMakeLists.txt`、`srv_dict.c`、`tools/build_flash_dict.py` |
+| 多加字体大小 | 阅读器 14/16/18/20/22px：14 内嵌，其余由 `tools/gen_read_fonts.py` 生成并打进 11MB `font` 分区（SD `/fonts` 优先），`ui_font` 按需加载/释放 | `ui/ui_font.[ch]`、`ui_set_read.c`、`ui_reader.c`、`tools/gen_read_fonts.py`、`partitions.csv` |
+| 单词放进 Flash | **最终改为不放**：完整词库 27 万词太大，词库仍只放 SD；Flash 剩余空间改为字库。`tools/build_flash_dict.py` 留作精简备份工具 | `partitions.csv`、`srv_dict.c`、`tools/build_flash_dict.py` |
 | 设置保存到分区、防止坏文件无限重启 | 设置改存 NVS（blob + magic/版本/长度/CRC32）；读坏回默认；旧 `/config.dat` 首次导入一次 | `srv_config.[ch]` |
 | 版本 1.5.4 | 根 CMakeLists `PROJECT_VER` | `CMakeLists.txt` |
 | 词书里大写单词「列表有、点开打不开」 | `key_of()` 锚点 key 没折叠大小写：`find_word/prefix` 用 `strncasecmp` 但锚点二分用 `memcmp`，`Apple` 会定位到 a 段之前，128 行扫不到。现在 key 统一折叠 ASCII 大小写 | `srv_dict.c` |
@@ -565,28 +565,30 @@ nvs 0x9000 24KB | otadata | phy_init
 factory 0x20000 6MB
 ota_0   0x620000 6MB
 ota_1   0xC20000 6MB
-dict    0x1220000 9MB (SPIFFS, 图像由 spiffs_create_partition_image 生成)
+font    0x1220000 11MB (SPIFFS, 16/18/20/22px 阅读字库)
 ```
 
 - 原 `fonts`(4MB) 与 `storage`(5MB) 已删除；它们此前没有被代码使用。
-- `flash_assets/` 与 `font/font_ui_*.bin` 都是生成物，已加入 `.gitignore`。
-- 没有 `flash_assets` 时 CMake 跳过镜像，设备回退 SD 词库。
-- **OTA 不更新分区表**，从旧版本 OTA 过来时新固件会找不到 `dict` 分区并回退 SD，不会崩。
+- `dict` 分区已取消：词库只放 SD 卡（完整 27 万词太大），Flash 空间给字库。
+- `flash_assets/fonts/` 与 `font/font_ui_*.bin` 都是生成物，已加入 `.gitignore`。
+- 没有 `flash_assets/fonts` 时 CMake 跳过镜像，字号回退 SD /fonts 或 14px。
+- **OTA 不更新分区表**，从旧版本 OTA 过来时新固件会找不到 `font` 分区并回退 SD，不会崩。
 
 ### 13.3 字体与 PSRAM
 
-- 16px = 1.74MB，20px = 2.62MB；`ui_read_font_get()` 同时只缓存一档，退出阅读器
+- 16px = 1.74MB，18px ≈ 2.1MB，20px = 2.62MB，22px ≈ 3.1MB；四档约 9.6MB，打进 11MB 的 `font` 分区。
+- `ui_read_font_get()` 同时只缓存一档，退出阅读器
   （`app_navigator_current() != PAGE_READER`）时释放。
+- 查找顺序：SD `/fonts/font_ui_<px>.bin` → Flash `/fontflash/font_ui_<px>.bin`。
 - 加载路径先读整文件到 PSRAM 再 `lv_binfont_create_from_buffer()`，峰值约 2 倍文件大小。
   真机上 PSRAM 吃紧时可能回退 14px（日志 `ui_font: 字库缓冲分配失败`），这是有意行为。
 - 模拟器的 `lv_conf.h` 已打开 `LV_USE_FS_MEMFS`（65），与固件 sdkconfig 对齐。
 
-### 13.4 词库 Flash 细节
+### 13.4 词库
 
-- 裁剪规则：带考试/牛津/Collins 标签的词优先，然后补纯字母长度 ≤6 的短词到预算（默认 7.5MB）。
-- 查找顺序：SD `<mount>/dict` → `/flash/dict`。
-- 中英词典 `zhdict.*` 仍只在 SD；没有 SD 时中文查询不可用（UI 会提示）。
-- `variants.*` 未打包，变形表缺失时 `srv_dict` 只做规则还原。
+- 词库只从 SD 卡 `<mount>/dict` 读取，不再进 Flash；没插卡时查词不可用（UI 会提示）。
+- `tools/build_flash_dict.py` 保留为「生成精简词库备份」的工具，不再参与固件构建。
+- 中英词典 `zhdict.*` 也只在 SD；`variants.*` 缺失时只做规则还原。
 
 ### 13.5 姿态广播协议
 
@@ -607,24 +609,25 @@ MOTION <seq> <t_ms> <qw> <qx> <qy> <qz> <ax> <ay> <az> <gx> <gy> <gz>
 1. 推送触发 GitHub Actions（`build.yml`）看真机编译是否有错。
    不想本地装 IDF 时可以用 `tools/ci_panel`：先在面板里推送当前分支，CI 成功后
    下载 `firmware` artifact 并烧录。
-2. 内置词库用本地一键生成：
+2. 阅读字库用本地一键生成：
 
    ```powershell
-   python tools/build_flash_dict.py
+   python tools/gen_read_fonts.py
    ```
 
-   生成 `flash_assets/dict/` + `build/dict.bin`。CI 面板烧录时自动检测
-   `build/dict.bin` 并追加到 `0x1220000`（确认框会显示「内置词库：有/无」）。
-   CI artifact 本身不含它，所以**不用 build.ps1 也能刷完整词库**。
-3. 首次刷入新分区表后（即使没带 dict.bin）分区表已经生效，之后只需重烧
-   `dict.bin` 到 `0x1220000` 即可。
-3. 真机逐项验收：
+   生成 `font/font_ui_{16,18,20,22}.bin`、`flash_assets/fonts/` 和 `build/font.bin`
+   （11MB SPIFFS 镜像）。CI 面板烧录时自动检测 `build/font.bin` 并追加到
+   `0x1220000`（确认框会显示「阅读字库：有/无」）。CI artifact 本身不含它，
+   所以**不用 build.ps1 也能刷完整字库**。
+3. 首次刷入新分区表后（即使没带 font.bin）分区表已经生效，之后只需重烧
+   `font.bin` 到 `0x1220000` 即可。
+4. 真机逐项验收：
    - 转屏：书架不重扫、单词搜索不丢、AI 不重连；
    - 录音机列表点播放；音乐页放 `/record/rec-N.wav`；
    - 段距 0/1/2/3/4 格都生效；
    - 设置改完重启仍保留；`/config.dat` 删除后设置仍在（NVS）；
-   - 阅读器字号 14/16/20（先把 `font/font_ui_*.bin` 拷到 SD `/fonts`）；
-   - 拔 SD 后查词能查常用词（内置词库）；
+   - 阅读器字号 14/16/18/20/22（字库在 Flash；SD `/fonts` 优先）；
+   - 词库仍从 SD `/dict` 读；拔卡后查词提示不可用；
    - 设置→关于→姿态广播，电脑 `python tools/motion3d/motion_view.py` 看模型。
-4. 回归：AI、电台、音乐、照片、单词学习。
+5. 回归：AI、电台、音乐、照片、单词学习。
 

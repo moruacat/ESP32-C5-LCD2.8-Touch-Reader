@@ -793,7 +793,7 @@ static void on_text_done(const char *text, void *arg)
     /* 词库不可用：分清是没插卡还是词库文件缺失，别让用户以为是"没收录" */
     if (srv_dict_init() != ESP_OK) {
         if (!srv_sd_is_mounted()) {
-            list_hint("词库不可用：SD 卡未挂载，且 Flash 里没有内置词库");
+            list_hint("词库不可用：SD 卡未挂载");
         } else {
             list_hint("词库不可用：SD 卡的 /dict 下要有 dict.dat 与 dict.idx\n"
                       "（用 tools/build_dict.py 生成）");
@@ -1090,7 +1090,7 @@ void ui_words_create(lv_obj_t *root)
         list_hint("点上方搜索框输入单词");
         view_show(VIEW_LIST);
     } else if (!srv_sd_is_mounted()) {
-        list_hint("词库不可用：SD 卡未挂载，且 Flash 里没有内置词库");
+        list_hint("词库不可用：SD 卡未挂载");
         view_show(VIEW_LIST);
     } else {
         list_hint("词库不可用：SD 卡的 /dict 下要有 dict.dat 与 dict.idx");

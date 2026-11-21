@@ -30,8 +30,8 @@ from .esptool_util import EsptoolTool
 from .github_api import GitHubClient, GitHubError, USER_AGENT
 
 
-#: partitions.csv 里 dict 分区的偏移（本地 build/dict.bin 烧到这里）
-DICT_PARTITION_OFFSET = "0x1220000"
+#: partitions.csv 里 font 分区的偏移（本地 build/font.bin 烧到这里）
+FONT_PARTITION_OFFSET = "0x1220000"
 
 
 class WorkerCancelled(RuntimeError):
@@ -227,7 +227,7 @@ class ArtifactWorker(BaseWorker):
             boot = self._find_one(out_dir, "bootloader.bin", required=True)
             part = self._find_one(out_dir, "partition-table.bin", required=True)
             ota = self._find_one(out_dir, "ota_data_initial.bin", required=False)
-            dict_bin = self._find_one(out_dir, "dict.bin", required=False)
+            font_bin = self._find_one(out_dir, "font.bin", required=False)
             assert app is not None and boot is not None and part is not None
 
             meta = {
@@ -241,9 +241,9 @@ class ArtifactWorker(BaseWorker):
                 "bootloader": str(boot),
                 "partition_table": str(part),
                 "ota_data": str(ota) if ota else "",
-                # CI 通常没有 flash_assets，所以 artifact 里一般没有 dict.bin；
-                # 烧录时会再回退到本地 build/dict.bin（见 window._flash_firmware）
-                "dict": str(dict_bin) if dict_bin else "",
+                # CI 通常没有 flash_assets，所以 artifact 里一般没有 font.bin；
+                # 烧录时会再回退到本地 build/font.bin（见 window._flash_firmware）
+                "font": str(font_bin) if font_bin else "",
             }
             (out_dir / "download-meta.json").write_text(
                 json.dumps(meta, ensure_ascii=False, indent=2),
@@ -263,7 +263,7 @@ class ArtifactWorker(BaseWorker):
                 "bootloader": str(boot),
                 "partition_table": str(part),
                 "ota_data": str(ota) if ota else "",
-                "dict": str(dict_bin) if dict_bin else "",
+                "font": str(font_bin) if font_bin else "",
                 "total_bytes": total,
                 "elapsed": elapsed,
             })
@@ -536,14 +536,14 @@ class FlashWorker(BaseWorker):
             args += ["0xf000", self.paths["ota_data"]]
         args += ["0x20000", self.paths["app"]]
 
-        # 本地一键生成的 dict 分区镜像（tools/build_flash_dict.py 默认输出
-        # build/dict.bin）。CI artifact 里一般没有它，所以由 window 传入本地路径。
-        dict_bin = str(self.paths.get("dict") or "").strip()
-        if dict_bin and Path(dict_bin).is_file():
-            args += [DICT_PARTITION_OFFSET, dict_bin]
-            self.log.emit(f"内置词库镜像：{dict_bin} -> {DICT_PARTITION_OFFSET}", "info")
+        # 本地一键生成的 font 分区镜像（tools/gen_read_fonts.py 默认输出
+        # build/font.bin）。CI artifact 里一般没有它，所以由 window 传入本地路径。
+        font_bin = str(self.paths.get("font") or "").strip()
+        if font_bin and Path(font_bin).is_file():
+            args += [FONT_PARTITION_OFFSET, font_bin]
+            self.log.emit(f"阅读字库镜像：{font_bin} -> {FONT_PARTITION_OFFSET}", "info")
         else:
-            self.log.emit("没有内置词库镜像，dict 分区保持原样（查词回退 SD）", "muted")
+            self.log.emit("没有阅读字库镜像，font 分区保持原样（字号回退 SD/14px）", "muted")
 
         cmd = list(self.tool.cmd) + args
 

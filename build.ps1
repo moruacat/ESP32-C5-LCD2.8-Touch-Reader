@@ -87,21 +87,21 @@ try {
             exit $LASTEXITCODE
         }
     } else {
-        # 完整烧录：bootloader + 分区表 + otadata + app + 内置词库
+        # 完整烧录：bootloader + 分区表 + otadata + app + 阅读字库
         # 注意不能用 `idf.py flash`：它的目标依赖 build，会把刚才编好的又编一遍。
         # 镜像偏移与项目 partitions.csv / sdkconfig 对应。
         $boot    = Join-Path $root "build\bootloader\bootloader.bin"
         $part    = Join-Path $root "build\partition_table\partition-table.bin"
         $otadata = Join-Path $root "build\ota_data_initial.bin"
-        # flash_assets/ 存在时 CMake 会生成 dict 分区镜像；不存在就不烧这一块
-        $dictBin = Join-Path $root "build\dict.bin"
+        # flash_assets/fonts 存在时 CMake 会生成 font 分区镜像；不存在就不烧这一块
+        $fontBin = Join-Path $root "build\font.bin"
 
         if (-not (Test-Path $boot) -or -not (Test-Path $part)) {
             Write-Host "找不到 bootloader / 分区表镜像，先跑一次不带 -AppOnly 的完整编译。" -ForegroundColor Red
             exit 1
         }
 
-        Write-Host "完整烧录（bootloader / 分区表 / app$(if (Test-Path $dictBin) { ' / 内置词库' })）到 $Port ..." -ForegroundColor Cyan
+        Write-Host "完整烧录（bootloader / 分区表 / app$(if (Test-Path $fontBin) { ' / 阅读字库' })）到 $Port ..." -ForegroundColor Cyan
         $flashArgs = @(
             "--chip", "esp32c5", "-p", $Port, "-b", "460800",
             "--before", "default-reset", "--after", "hard-reset",
@@ -113,9 +113,9 @@ try {
             $flashArgs += @("0xf000", $otadata)
         }
         $flashArgs += @("0x20000", $appBin)
-        # dict 分区偏移与 partitions.csv 的 `dict, data, spiffs, 0x1220000, 0x900000` 一致
-        if (Test-Path $dictBin) {
-            $flashArgs += @("0x1220000", $dictBin)
+        # font 分区偏移与 partitions.csv 的 `font, data, spiffs, 0x1220000, 0xB00000` 一致
+        if (Test-Path $fontBin) {
+            $flashArgs += @("0x1220000", $fontBin)
         }
 
         python -m esptool @flashArgs
