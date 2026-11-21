@@ -6,7 +6,7 @@
 #include "esp_heap_caps.h"
 
 #ifdef ESP_PLATFORM
-#include "esp_vfs_spiffs.h"
+#include "esp_spiffs.h"     /* IDF 6.x：esp_vfs_spiffs.h 已并入 esp_spiffs.h */
 #endif
 
 #include <ctype.h>
